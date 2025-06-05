@@ -54,7 +54,7 @@ import type {
     SourceSpecification,
     TerrainSpecification,
     ProjectionSpecification,
-    SkySpecification
+    SkySpecification,
 } from '@maplibre/maplibre-gl-style-spec';
 import type {CanvasSourceSpecification} from '../source/canvas_source';
 import type {GeoJSONFeature, MapGeoJSONFeature} from '../util/vectortile_to_geojson';
@@ -66,6 +66,8 @@ import {type ICameraHelper} from '../geo/projection/camera_helper';
 import {MercatorCameraHelper} from '../geo/projection/mercator_camera_helper';
 import {isAbortError} from '../util/abort_error';
 import {isFramebufferNotCompleteError} from '../util/framebuffer_error';
+import {createCalculateTileZoomFunction} from '../geo/projection/covering_tiles';
+import {CanonicalTileID} from '../source/tile_id';
 
 const version = packageJSON.version;
 
@@ -772,6 +774,29 @@ export class Map extends Camera {
      */
     _getMapId() {
         return this._mapId;
+    }
+
+    /**
+     * Sets a global state property that can be retrieved with the [`global-state` expression](https://maplibre.org/maplibre-style-spec/expressions/#global-state).
+     * If the value is null, it resets the property to its default value defined in the [`state` style property](https://maplibre.org/maplibre-style-spec/root/#state).
+     *
+     * Note that changing `global-state` values defined in layout properties is not supported, and will be ignored.
+     *
+     * @param propertyName - The name of the state property to set.
+     * @param value - The value of the state property to set.
+     */
+    setGlobalStateProperty(propertyName: string, value: any) {
+        this.style.setGlobalStateProperty(propertyName, value);
+        return this._update(true);
+    }
+
+    /**
+     * Returns the global map state
+     *
+     * @returns The map state object.
+    */
+    getGlobalState(): Record<string, any> {
+        return this.style.getGlobalState();
     }
 
     /**
@@ -2065,11 +2090,14 @@ export class Map extends Camera {
             if (!sourceCache) throw new Error(`cannot load terrain, because there exists no source with ID: ${options.source}`);
             // Update terrain tiles when adding new terrain
             if (this.terrain === null) sourceCache.reload();
-            // Warn once if user is using the same source for hillshade and terrain
+            // Warn once if user is using the same source for hillshade/color-relief and terrain
             for (const index in this.style._layers) {
                 const thisLayer = this.style._layers[index];
                 if (thisLayer.type === 'hillshade' && thisLayer.source === options.source) {
                     warnOnce('You are using the same source for a hillshade layer and for 3D terrain. Please consider using two separate sources to improve rendering quality.');
+                }
+                if (thisLayer.type === 'color-relief' && thisLayer.source === options.source) {
+                    warnOnce('You are using the same source for a color-relief layer and for 3D terrain. Please consider using two separate sources to improve rendering quality.');
                 }
             }
             this.terrain = new Terrain(this.painter, sourceCache, options);
@@ -2086,7 +2114,12 @@ export class Map extends Camera {
                             this.transform.setElevation(this.terrain.getElevationForLngLatZoom(this.transform.center, this.transform.tileZoom));
                         }
                     }
-                    this.terrain.sourceCache.freeRtt(e.tile.tileID);
+
+                    if (e.source?.type === 'image') {
+                        this.terrain.sourceCache.freeRtt();
+                    } else {
+                        this.terrain.sourceCache.freeRtt(e.tile.tileID);
+                    }
                 }
             };
             this.style.on('data', this._terrainDataCallback);
@@ -2169,6 +2202,64 @@ export class Map extends Camera {
      */
     getSource<TSource extends Source>(id: string): TSource | undefined {
         return this.style.getSource(id) as TSource;
+    }
+
+    /**
+     * Change the tile Level of Detail behavior of the specified source. These parameters have no effect when 
+     * pitch == 0, and the largest effect when the horizon is visible on screen.
+     *
+     * @param maxZoomLevelsOnScreen - The maximum number of distinct zoom levels allowed on screen at a time.
+     * There will generally be fewer zoom levels on the screen, the maximum can only be reached when the horizon
+     * is at the top of the screen. Increasing the maximum number of zoom levels causes the zoom level to decay 
+     * faster toward the horizon.
+     * @param tileCountMaxMinRatio - The ratio of the maximum number of tiles loaded (at high pitch) to the minimum
+     * number of tiles loaded. Increasing this ratio allows more tiles to be loaded at high pitch angles. If the ratio
+     * would otherwise be exceeded, the zoom level is reduced uniformly to keep the number of tiles within the limit.
+     * @param sourceId - The ID of the source to set tile LOD parameters for. All sources will be updated if unspecified.
+     * If `sourceId` is specified but a corresponding source does not exist, an error is thrown.
+     * @example
+     * ```ts
+     * map.setSourceTileLodParams(4.0, 3.0, 'terrain');
+     * ```
+     * @see [Modify Level of Detail behavior](https://maplibre.org/maplibre-gl-js/docs/examples/lod-control/)
+
+     */
+    setSourceTileLodParams(maxZoomLevelsOnScreen: number, tileCountMaxMinRatio: number, sourceId?: string) : this {
+        if (sourceId) {
+            const source = this.getSource(sourceId);
+            if(!source) {
+                throw new Error(`There is no source with ID "${sourceId}", cannot set LOD parameters`);
+            }
+            source.calculateTileZoom = createCalculateTileZoomFunction(Math.max(1, maxZoomLevelsOnScreen), Math.max(1, tileCountMaxMinRatio));
+        } else {
+            for (const id in this.style.sourceCaches) {
+                this.style.sourceCaches[id].getSource().calculateTileZoom = createCalculateTileZoomFunction(Math.max(1, maxZoomLevelsOnScreen), Math.max(1, tileCountMaxMinRatio));
+            }
+        }
+        this._update(true);
+        return this;
+    }
+
+    /**
+     * Triggers a reload of the selected tiles
+     *
+     * @param sourceId - The ID of the source
+     * @param tileIds - An array of tile IDs to be reloaded. If not defined, all tiles will be reloaded.
+     * @example
+     * ```ts
+     * map.refreshTiles('satellite', [{x:1024, y: 1023, z: 11}, {x:1023, y: 1023, z: 11}]);
+     * ```
+     */
+    refreshTiles(sourceId: string, tileIds?: Array<{x: number; y: number; z: number}>) {
+        const sourceCache = this.style.sourceCaches[sourceId];
+        if(!sourceCache) {
+            throw new Error(`There is no source cache with ID "${sourceId}", cannot refresh tile`);
+        }
+        if (tileIds === undefined) {
+            sourceCache.reload(true);
+        } else {
+            sourceCache.refreshTiles(tileIds.map((tileId) => {return new CanonicalTileID(tileId.z, tileId.x, tileId.y);}));
+        }
     }
 
     /**
@@ -3210,7 +3301,8 @@ export class Map extends Camera {
                 now,
                 fadeDuration,
                 zoomHistory: this.style.zoomHistory,
-                transition: this.style.getTransition()
+                transition: this.style.getTransition(),
+                globalState: this.style.getGlobalState()
             });
 
             const factor = parameters.crossFadingFactor();
