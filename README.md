@@ -162,7 +162,6 @@ Please keep in mind: Unauthorized backports are the biggest threat to the MapLib
 
 TODO:
 - new style property, i.e. `line-overflow: 'visible'` which skips the stencil test for those lines, you would need to add the definition for this property in `src/style/style_layer/line_style_layer.ts`
-- find better test data to demonstrating issues and fixes - tippecanoe make some, share from VPS?
 
 Notes: GeoServer Vector Tiles extension does not support buffer size increase.
 

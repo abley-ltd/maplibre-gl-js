@@ -32,30 +32,58 @@
           zoom: 8,
       });
 
+      // map.on('load', () => {
+      //     map.addSource('terrain', {
+      //         type: 'vector',
+      //         tiles: ['https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.pbf'],
+      //     });
+      //     map.addLayer({
+      //         id: 'terrain-data',
+      //         type: 'line',
+      //         source: 'terrain',
+      //         'source-layer': 'countries',
+      //         paint: {
+      //             'line-color': '#ff0000',
+      //             'line-width': 3,
+      //             'line-offset': 128,
+      //         },
+      //     });
+      //     map.addLayer({
+      //         id: 'terrain-data2',
+      //         type: 'line',
+      //         source: 'terrain',
+      //         'source-layer': 'countries',
+      //         paint: {
+      //             'line-color': '#0000ff',
+      //             'line-width': 2,
+      //         },
+      //     });
+      // });
+
       map.on('load', () => {
-          map.addSource('terrain', {
+          map.addSource('roads', {
               type: 'vector',
-              tiles: ['https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.pbf'],
+              url: 'https://api.maptiler.com/tiles/v3/tiles.json?key=Y9Vwa7j2yuR1fuijJHQS',
           });
           map.addLayer({
-              id: 'terrain-data',
+              id: 'roads-offset',
               type: 'line',
-              source: 'terrain',
-              'source-layer': 'countries',
+              source: 'roads',
+              'source-layer': 'transportation',
               paint: {
                   'line-color': '#ff0000',
-                  'line-width': 3,
-                  'line-offset': 128,
+                  'line-width': 5,
+                  'line-offset': 32,
               },
           });
           map.addLayer({
-              id: 'terrain-data2',
+              id: 'roads-wide',
               type: 'line',
-              source: 'terrain',
-              'source-layer': 'countries',
+              source: 'roads',
+              'source-layer': 'transportation',
               paint: {
                   'line-color': '#0000ff',
-                  'line-width': 2,
+                  'line-width': 48,
               },
           });
       });
