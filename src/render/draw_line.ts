@@ -127,14 +127,15 @@ export function drawLine(painter: Painter, sourceCache: SourceCache, layer: Line
             gradientTexture.bind(layer.stepInterpolant ? gl.NEAREST : gl.LINEAR, gl.CLAMP_TO_EDGE);
         }
 
-        const isOffset = offset.constantOr(0) > 0;
+        // wide or highly offset lines can overflow their tile, disable stencil clipping for these lines
+        const isOverflowCandidate = width.constantOr(0) > 9 || offset.constantOr(0) > 5;
 
         let stencil: StencilMode;
         if (isRenderingToTexture) {
             const [stencilModes] = painter.getStencilConfigForOverlapAndUpdateStencilID(coords);
             stencil = stencilModes[coord.overscaledZ];
         } else {
-            stencil = painter.stencilModeForClipping(coord, isOffset);
+            stencil = painter.stencilModeForClipping(coord, isOverflowCandidate);
         }
 
         program.draw(context, gl.TRIANGLES, depthMode,
