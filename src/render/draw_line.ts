@@ -128,7 +128,9 @@ export function drawLine(painter: Painter, sourceCache: SourceCache, layer: Line
         }
 
         // wide or highly offset lines can overflow their tile, disable stencil clipping for these lines
-        const isOverflowCandidate = width.constantOr(0) > 9 || offset.constantOr(0) > 5;
+        console.log('offset', offset.value);
+        const isOverflowCandidate = width.constantOr(0) > 9 || offset.value['kind'] === 'composite' || offset.constantOr(0) > 5;
+        // const isOverflowCandidate = width.constantOr(0) > 9 || offset.constantOr(0) > 5;
 
         let stencil: StencilMode;
         if (isRenderingToTexture) {
