@@ -47,11 +47,11 @@ Full documentation for this library [is available here](https://maplibre.org/map
 
 Check out the features through [examples](https://maplibre.org/maplibre-gl-js/docs/examples/).
 
-| Showcases                                                                                                  |                                                                                                                            |
-| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| ![Display a map](https://maplibre.org/maplibre-gl-js/docs/assets/examples/display-a-map.png)               | ![Third party vector tile source](https://maplibre.org/maplibre-gl-js/docs/assets/examples/3d-terrain.png)                 |
-| ![Animate a series of images](https://maplibre.org/maplibre-gl-js/docs/assets/examples/animate-images.png) | ![Create a heatmap layer](https://maplibre.org/maplibre-gl-js/docs/assets/examples/create-a-heatmap-layer.png)             |
-| ![3D buildings](https://maplibre.org/maplibre-gl-js/docs/assets/examples/display-buildings-in-3d.png)      | ![Visualize population density](https://maplibre.org/maplibre-gl-js/docs/assets/examples/visualize-population-density.png) |
+| Showcases                                                                                                              |                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| ![Display a map](https://maplibre.org/maplibre-gl-js/docs/assets/examples/display-a-map.png)                           | ![Third party vector tile source](https://maplibre.org/maplibre-gl-js/docs/assets/examples/3d-terrain.png)                 |
+| ![Animate a series of images](https://maplibre.org/maplibre-gl-js/docs/assets/examples/animate-a-series-of-images.png) | ![Create a heatmap layer](https://maplibre.org/maplibre-gl-js/docs/assets/examples/create-a-heatmap-layer.png)             |
+| ![3D buildings](https://maplibre.org/maplibre-gl-js/docs/assets/examples/display-buildings-in-3d.png)                  | ![Visualize population density](https://maplibre.org/maplibre-gl-js/docs/assets/examples/visualize-population-density.png) |
 
 <br />
 
@@ -161,26 +161,3 @@ Please keep in mind: Unauthorized backports are the biggest threat to the MapLib
 ## License
 
 **MapLibre GL JS** is licensed under the [3-Clause BSD license](./LICENSE.txt).
-
-# FIXME: Stacy notes
-
-TODO:
-- new style property, i.e. `line-overflow: 'visible'` which skips the stencil test for those lines, you would need to add the definition for this property in `src/style/style_layer/line_style_layer.ts`
-- test with opacity - is overdrawing an issue?
-
-Notes: GeoServer Vector Tiles extension does not support buffer size increase.
-
-The problem being solved is allowing this shader-generated representation to draw outside the tile's clipping mask. It has nothing to do with needing source geometry from adjacent tiles. My previous "missing data" disadvantage was misleading. The data isn't missing; the space to draw it is what's being restricted.
-
-The limitation I was describing only applies to a very specific edge case: a single continuous feature (like a long road) whose source geometry is split across multiple tiles. In that scenario, this method would not magically render the segment from Tile B while processing Tile A. It would only render Tile A's segment, allowing it to spill over visually.
-
-Pros and cons for modifying stencilModeForClipping to conditionally disable the stencil mask.
-
-✅ Advantages
-1. Solves the Core Problem: This approach perfectly resolves the primary visual artifact of wide or offset lines being abruptly clipped at tile seams. It allows the complete rendered shape of a feature to be drawn, even if it extends beyond the source tile's boundaries.
-1. High Performance: It is significantly faster than any solution involving fetching and parsing data from adjacent tiles. The operation is handled entirely on the GPU with a simple state change, adding negligible overhead.
-1. Implementation Simplicity: Compared to the major architectural changes required for neighbor-tile-fetching, this is a relatively straightforward modification contained within the rendering logic of painter.ts, controlled by a single new style property.
-
-⚠️ Disadvantages / Limitations
-1. Geometric Discontinuity for Spanning Features: The primary limitation is for features whose source geometry is split across multiple tiles (e.g., a long highway). This method will allow the rendered line from Tile A to spill into Tile B's area, but the line will terminate where Tile A's source data ends (at the buffer edge). When Tile B is then rendered, its segment of the highway will appear. While this is better than a hard clip, it can create subtle visual issues at the join, especially with complex styles like rounded line caps (line-cap: 'round'), where the two separately rendered halves may not form a perfect, continuous whole.
-1. Potential Layer Order Conflicts: MapLibre guarantees correct layering within a tile and draws tiles sequentially. If a line from Tile A overflows onto Tile B, it is rendered before any of Tile B's layers. If a feature in Tile B (e.g., a building outline) is supposed to be drawn on top of the overflowing line from Tile A, the default rendering order may show it incorrectly underneath. This can often be mitigated by careful ordering of your style layers, but it is a consideration for complex maps where layer interactivity at tile borders is important.
