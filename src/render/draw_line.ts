@@ -20,7 +20,6 @@ import type {ProgramConfiguration} from '../data/program_configuration';
 import {clamp, nextPowerOfTwo} from '../util/util';
 import {renderColorRamp} from '../util/color_ramp';
 import {EXTENT} from '../data/extent';
-import type {StencilMode} from '../gl/stencil_mode';
 import type {RGBAImage} from '../util/image';
 
 type GradientTexture = {
@@ -230,17 +229,9 @@ export function drawLine(painter: Painter, sourceCache: SourceCache, layer: Line
         }
 
         // wide or highly offset lines can overflow their tile, disable stencil clipping for these lines
-        console.log('offset', offset.value);
-        const isOverflowCandidate = width.constantOr(0) > 9 || offset.value['kind'] === 'composite' || offset.constantOr(0) > 5;
-        // const isOverflowCandidate = width.constantOr(0) > 9 || offset.constantOr(0) > 5;
+        const isOverflowCandidate = width.constantOr(0) > 10 || offset.value['kind'] === 'composite' || offset.constantOr(0) > 5;
 
-        let stencil: StencilMode;
-        if (isRenderingToTexture) {
-            const [stencilModes] = painter.getStencilConfigForOverlapAndUpdateStencilID(coords);
-            stencil = stencilModes[coord.overscaledZ];
-        } else {
-            stencil = painter.stencilModeForClipping(coord, isOverflowCandidate);
-        }
+        const stencil = painter.stencilModeForClipping(coord, isOverflowCandidate);
 
         program.draw(context, gl.TRIANGLES, depthMode,
             stencil, colorMode, CullFaceMode.disabled, uniformValues, terrainData, projectionData,
