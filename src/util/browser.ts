@@ -1,9 +1,10 @@
-import {createAbortError} from './abort_error';
+import {AbortError} from './abort_error';
 import {subscribe} from './util';
 
 let linkEl;
 
 let reducedMotionQuery: MediaQueryList;
+let reducedMotionOverride: boolean | undefined;
 
 /** */
 export const browser = {
@@ -16,7 +17,7 @@ export const browser = {
         const {unsubscribe} = subscribe(abortController.signal, 'abort', () => {
             unsubscribe();
             cancelAnimationFrame(frameId);
-            reject(createAbortError());
+            reject(new AbortError(abortController.signal.reason));
         }, false);
     },
 
@@ -52,6 +53,7 @@ export const browser = {
     hardwareConcurrency: typeof navigator !== 'undefined' && navigator.hardwareConcurrency || 4,
 
     get prefersReducedMotion(): boolean {
+        if (reducedMotionOverride !== undefined) return reducedMotionOverride;
         // In case your test crashes when checking matchMedia, call setMatchMedia from 'src/util/test/util'
         if (!matchMedia) return false;
         //Lazily initialize media query
@@ -60,4 +62,8 @@ export const browser = {
         }
         return reducedMotionQuery.matches;
     },
+
+    set prefersReducedMotion(value: boolean) {
+        reducedMotionOverride = value;
+    }
 };
