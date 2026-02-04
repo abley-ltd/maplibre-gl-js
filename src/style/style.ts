@@ -444,7 +444,7 @@ export class Style extends Evented {
         this.fire(new Event('dataloading', {dataType: 'style'}));
 
         this._frameRequest = new AbortController();
-        browser.frameAsync(this._frameRequest).then(() => {
+        browser.frameAsync(this._frameRequest, this.map._ownerWindow).then(() => {
             this._frameRequest = null;
             options.validate = options.validate !== false;
             this._load(json, options, previousStyle);
@@ -882,6 +882,8 @@ export class Style extends Evented {
 
         // reset serialization field, to be populated only when needed
         this._serializedLayers = null;
+
+        this.fire(new Event('style.load', {style: this}));
 
         return true;
     }
@@ -1913,12 +1915,13 @@ export class Style extends Evented {
         return glyphs;
     }
 
-    getGlyphsUrl() {
+    getGlyphsUrl(): string | null {
         return this.stylesheet.glyphs || null;
     }
 
-    setGlyphs(glyphsUrl: string | null, options: StyleSetterOptions = {}) {
+    setGlyphs(glyphsUrl: string | null | undefined, options: StyleSetterOptions = {}) {
         this._checkLoaded();
+
         if (glyphsUrl && this._validate(validateStyle.glyphs, 'glyphs', glyphsUrl, null, options)) {
             return;
         }
