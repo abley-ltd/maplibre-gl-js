@@ -1,5 +1,5 @@
 import {Event, ErrorEvent, Evented} from '../util/evented';
-import {extend, warnOnce, type ExactlyOne} from '../util/util';
+import {ensureError, extend, warnOnce, type ExactlyOne} from '../util/util';
 import {EXTENT} from '../data/extent';
 import {ResourceType} from '../util/request_manager';
 import {browser} from '../util/browser';
@@ -192,31 +192,27 @@ export class GeoJSONSource extends Evented implements Source {
         // third-party sources to hack/reuse GeoJSONSource.
         this.workerOptions = extend({
             source: this.id,
-            cluster: options.cluster || false,
             geojsonVtOptions: {
                 buffer: this._pixelsToTileUnits(options.buffer !== undefined ? options.buffer : 128),
                 tolerance: this._pixelsToTileUnits(options.tolerance !== undefined ? options.tolerance : 0.375),
                 extent: EXTENT,
                 maxZoom: this.maxzoom,
                 lineMetrics: options.lineMetrics || false,
-                generateId: options.generateId || false
-            },
-            superclusterOptions: {
-                maxZoom: this._getClusterMaxZoom(options.clusterMaxZoom),
-                minPoints: Math.max(2, options.clusterMinPoints || 2),
-                extent: EXTENT,
-                radius: this._pixelsToTileUnits(options.clusterRadius || 50),
-                log: false,
-                generateId: options.generateId || false
+                generateId: options.generateId || false,
+                promoteId: typeof options.promoteId === 'string' ? options.promoteId : undefined,
+                cluster: options.cluster || false,
+                clusterOptions: {
+                    maxZoom: this._getClusterMaxZoom(options.clusterMaxZoom),
+                    minPoints: Math.max(2, options.clusterMinPoints || 2),
+                    extent: EXTENT,
+                    radius: this._pixelsToTileUnits(options.clusterRadius || 50),
+                    log: false,
+                    generateId: options.generateId || false
+                },
             },
             clusterProperties: options.clusterProperties,
             filter: options.filter
         }, options.workerOptions);
-
-        // send the promoteId to the worker to have more flexible updates, but only if it is a string
-        if (typeof this.promoteId === 'string') {
-            this.workerOptions.promoteId = this.promoteId;
-        }
     }
 
     private _hasPendingWorkerUpdate(): boolean {
@@ -321,12 +317,12 @@ export class GeoJSONSource extends Evented implements Source {
      * ```
      */
     setClusterOptions(options: SetClusterOptions): this {
-        this.workerOptions.cluster = options.cluster;
+        this.workerOptions.geojsonVtOptions.cluster = options.cluster;
         if (options.clusterRadius !== undefined) {
-            this.workerOptions.superclusterOptions.radius = this._pixelsToTileUnits(options.clusterRadius);
+            this.workerOptions.geojsonVtOptions.clusterOptions.radius = this._pixelsToTileUnits(options.clusterRadius);
         }
         if (options.clusterMaxZoom !== undefined) {
-            this.workerOptions.superclusterOptions.maxZoom = this._getClusterMaxZoom(options.clusterMaxZoom);
+            this.workerOptions.geojsonVtOptions.clusterOptions.maxZoom = this._getClusterMaxZoom(options.clusterMaxZoom);
         }
         this._pendingWorkerUpdate.updateCluster = true;
         this._updateWorkerData();
@@ -349,7 +345,7 @@ export class GeoJSONSource extends Evented implements Source {
      * @param clusterId - The value of the cluster's `cluster_id` property.
      * @returns a promise that is resolved when the features are retrieved
      */
-    getClusterChildren(clusterId: number): Promise<Array<GeoJSON.Feature>> {
+    getClusterChildren(clusterId: number): Promise<GeoJSON.Feature[]> {
         return this.actor.sendAsync({type: MessageType.getClusterChildren, data: {type: this.type, clusterId, source: this.id}});
     }
 
@@ -378,7 +374,7 @@ export class GeoJSONSource extends Evented implements Source {
      * });
      * ```
      */
-    getClusterLeaves(clusterId: number, limit: number, offset: number): Promise<Array<GeoJSON.Feature>> {
+    getClusterLeaves(clusterId: number, limit: number, offset: number): Promise<GeoJSON.Feature[]> {
         return this.actor.sendAsync({type: MessageType.getClusterLeaves, data: {
             type: this.type,
             source: this.id,
@@ -424,7 +420,7 @@ export class GeoJSONSource extends Evented implements Source {
 
         // Data comes from a remote url
         if (typeof data === 'string') {
-            params.request = await this.map._requestManager.transformRequest(browser.resolveURL(data as string), ResourceType.Source);
+            params.request = await this.map._requestManager.transformRequest(browser.resolveURL(data), ResourceType.Source);
             params.request.collectResourceTiming = this._collectResourceTiming;
             return params;
         }
@@ -487,7 +483,7 @@ export class GeoJSONSource extends Evented implements Source {
                 return;
             }
 
-            this.fire(new ErrorEvent(err));
+            this.fire(new ErrorEvent(ensureError(err)));
         } finally {
             // If there is more pending data, update the worker again.
             if (this._hasPendingWorkerUpdate()) {
