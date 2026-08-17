@@ -251,6 +251,7 @@ function drawLineTiles(
 
         // wide or highly offset lines can overflow their tile, disable stencil clipping for these lines
         // constants below are based on GeoServer Vector tile default tile buffer of 5px
+        const width = layer.paint.get('line-width');
         const isOverflowCandidate = width.constantOr(0) > 10 || offset.value['kind'] === 'composite' || offset.constantOr(0) > 5;
 
         const stencil = painter.stencilModeForClipping(coord, isOverflowCandidate);
