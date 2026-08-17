@@ -1,8 +1,8 @@
 import {describe, afterEach, test, expect, vi} from 'vitest';
-import {parseGlyphPbf} from '../style/parse_glyph_pbf';
-import {GlyphManager} from './glyph_manager';
+import {parseGlyphPbf} from '../style/parse_glyph_pbf.ts';
+import {GlyphManager} from './glyph_manager.ts';
 import fs from 'fs';
-import {type RequestManager} from '../util/request_manager';
+import {type RequestManager} from '../util/request_manager.ts';
 
 describe('GlyphManager', () => {
     const GLYPHS = {};
@@ -32,6 +32,7 @@ describe('GlyphManager', () => {
 
     afterEach(() => {
         vi.clearAllMocks();
+        delete (document as any).fonts;
     });
 
     test('GlyphManager requests 0-255 PBF', async () => {
@@ -207,9 +208,7 @@ describe('GlyphManager', () => {
     test('GlyphManager caches locally generated glyphs', async () => {
 
         const manager = createGlyphManager(true, 'sans-serif');
-        const drawSpy = GlyphManager.TinySDF.prototype.draw = vi.fn().mockImplementation(() => {
-            return {data: new Uint8ClampedArray(60 * 60)} as any;
-        });
+        const drawSpy = vi.spyOn(GlyphManager.TinySDF.prototype, 'draw').mockReturnValue({data: new Uint8ClampedArray(60 * 60)} as any);
 
         // Katakana letter te
         const returnedGlyphs = await manager.getGlyphs({'Arial Unicode MS': [0x30c6]});
@@ -219,24 +218,56 @@ describe('GlyphManager', () => {
     });
 
     test('GlyphManager passes no language to TinySDF by default', async () => {
-        const langSpy = GlyphManager.TinySDF = vi.fn().mockImplementation(function () {
-            return {
-                draw: () => GLYPHS[0]
-            };
-        });
+        const langSpy = vi.spyOn(GlyphManager, 'TinySDF').mockImplementation(class { draw = () => GLYPHS[0]; });
         const manager = createGlyphManager(true, 'sans-serif');
         await manager.getGlyphs({'Arial Unicode MS': [0x30c6]});
         expect(langSpy).toHaveBeenCalledWith(expect.not.objectContaining({lang: expect.anything()}));
     });
 
     test('GlyphManager sets the language on TinySDF', async () => {
-        const langSpy = GlyphManager.TinySDF = vi.fn().mockImplementation(function () {
-            return {
-                draw: () => GLYPHS[0]
-            };
-        });
+        const langSpy = vi.spyOn(GlyphManager, 'TinySDF').mockImplementation(class { draw = () => GLYPHS[0]; });
         const manager = createGlyphManager(true, 'sans-serif', 'zh');
         await manager.getGlyphs({'Arial Unicode MS': [0x30c6]});
         expect(langSpy).toHaveBeenCalledWith(expect.objectContaining({lang: 'zh'}));
+    });
+
+    test('awaits document.fonts.load before instantiating TinySDF', async () => {
+        const loadSpy = vi.fn(() => Promise.resolve([]));
+        Object.defineProperty(document, 'fonts', {configurable: true, value: {load: loadSpy}});
+        const tinySdfSpy = vi.spyOn(GlyphManager, 'TinySDF').mockImplementation(class { draw = () => GLYPHS[0]; });
+
+        const manager = createGlyphManager(false, 'sans-serif');
+        await manager.getGlyphs({'Arial Unicode MS': [0x41]});
+
+        expect(loadSpy).toHaveBeenCalledTimes(1);
+        expect(tinySdfSpy).toHaveBeenCalledTimes(1);
+        expect(loadSpy.mock.invocationCallOrder[0]).toBeLessThan(tinySdfSpy.mock.invocationCallOrder[0]);
+    });
+
+    test('still instantiates TinySDF when document.fonts.load rejects', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const loadSpy = vi.fn(() => Promise.reject(new Error('font not found')));
+        Object.defineProperty(document, 'fonts', {configurable: true, value: {load: loadSpy}});
+        const tinySdfSpy = vi.spyOn(GlyphManager, 'TinySDF').mockImplementation(class { draw = () => GLYPHS[0]; });
+
+        const manager = createGlyphManager(false, 'sans-serif');
+        const result = await manager.getGlyphs({'Arial Unicode MS': [0x41]});
+
+        expect(loadSpy).toHaveBeenCalledTimes(1);
+        expect(tinySdfSpy).toHaveBeenCalledTimes(1);
+        expect(result['Arial Unicode MS'][0x41]).toBeDefined();
+    });
+
+    test('memoizes document.fonts.load per fontstack', async () => {
+        const loadSpy = vi.fn(() => Promise.resolve([]));
+        Object.defineProperty(document, 'fonts', {configurable: true, value: {load: loadSpy}});
+        vi.spyOn(GlyphManager, 'TinySDF').mockImplementation(class { draw = () => GLYPHS[0]; });
+
+        const manager = createGlyphManager(false, 'sans-serif');
+        await manager.getGlyphs({'Arial Unicode MS': [0x41]});
+        await manager.getGlyphs({'Arial Unicode MS': [0x42]});
+        await manager.getGlyphs({'Arial Unicode MS': [0x43]});
+
+        expect(loadSpy).toHaveBeenCalledTimes(1);
     });
 });

@@ -140,7 +140,7 @@ cd maplibre-gl-js &&
 npm install
 ```
 
-Before you can [run the docs](./docs/README.md), you need to ensure Docker is installed and you have permission to run `docker` commands without `sudo`, as explained [here in the Docker docs](https://docs.docker.com/engine/install/linux-postinstall/).
+Before you can [run the docs](./developer-guides/README-docs.md), you need to ensure Docker is installed and you have permission to run `docker` commands without `sudo`, as explained [here in the Docker docs](https://docs.docker.com/engine/install/linux-postinstall/).
 
 
 ### Windows
@@ -167,25 +167,17 @@ copy node_modules/headless-gl/deps/windows/dll/x64/*.dll c:\windows\system32
 
 ## Creating a Standalone Build
 
-A standalone build allows you to turn the contents of this repository into `maplibre-gl.js` and `maplibre-gl.css` files that can be included on an html page.
+A standalone build allows you to turn the contents of this repository into `maplibre-gl.mjs`, `maplibre-gl-worker.mjs` and `maplibre-gl.css` files that can be included on an html page.
 
 To create a standalone build, run
 ```bash
-npm run build-prod
-npm run build-css
+npm run build-dist
 ```
-Once those commands finish, you will have a standalone build at `dist/maplibre-gl.js` and `dist/maplibre-gl.css`
-
-## Analyze your Standalone Build
-
-MapLibre seeks to keep production bundle sizes small. If your changes involve substantial additions or changes to dependencies, the effects on bundle size can be visualized by running
-```bash
-npm run bundle-stats
-```
+Once that finishes, you will have a standalone build at `dist/maplibre-gl.mjs`, `dist/maplibre-gl-worker.mjs` and `dist/maplibre-gl.css`. Load it via `<script type="module">`; the worker URL is auto-detected as a sibling of the loaded module.
 
 ## Testing changes and Writing Documentation
 
-See [`docs/README.md`](./docs/README.md)
+See [`developer-guides/README-docs.md`](./developer-guides/README-docs.md)
 
 ## Writing & Running Tests
 
@@ -194,6 +186,8 @@ See [`test/README.md`](./test/README.md).
 ## Writing & Running Benchmarks
 
 See [`test/bench/README.md`](./test/bench/README.md).
+
+Micro benchmarks live next to the code they measure (`src/**/*.bench.ts`) and run with `npm run bench`; the end-to-end benchmarks live in `test/bench/e2e/`. If your PR claims a performance effect, include a before/after table from `npm run bench -- --compare` in the description.
 
 ## Further guides
 

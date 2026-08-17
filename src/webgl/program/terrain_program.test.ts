@@ -1,13 +1,13 @@
 import {describe, expect, test} from 'vitest';
-import {terrainUniformValues} from './terrain_program';
-import {Sky} from '../../style/sky';
+import {terrainUniformValues} from './terrain_program.ts';
+import {Sky} from '../../style/sky.ts';
 import {mat4} from 'gl-matrix';
 
 describe('terrainUniformValues', () => {
     test('disables fog when in globe projection mode', () => {
         const eleDelta = 1.0;
         const fogMatrix = mat4.create();
-        const sky = new Sky({});
+        const sky = new Sky({}, {});
         const pitch = 45;
         const isGlobeMode = true;
         const uniformValues = terrainUniformValues(eleDelta, fogMatrix, sky, pitch, isGlobeMode);
@@ -22,7 +22,7 @@ describe('terrainUniformValues', () => {
     test('enables fog when not in globe projection mode', () => {
         const eleDelta = 1.0;
         const fogMatrix = mat4.create();
-        const sky = new Sky({});
+        const sky = new Sky({}, {});
         const pitch = 45;
         const isGlobeMode = false;
         const uniformValues = terrainUniformValues(eleDelta, fogMatrix, sky, pitch, isGlobeMode);
