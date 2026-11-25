@@ -1,77 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <title>Vector line tile overflow</title>
-        <meta property="og:description" content="Vector line tile overflow." />
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="stylesheet" href="../../dist/maplibre-gl.css" />
-        <script src="../../dist/maplibre-gl-dev.js"></script>
-        <style>
-            body {
-                margin: 0;
-                padding: 0;
-            }
-            html,
-            body,
-            #map {
-                height: 100%;
-            }
-        </style>
-    </head>
-    <body>
-        <div id="map"></div>
-        <script>
-            const map = new maplibregl.Map({
-                container: "map",
-                style: "https://demotiles.maplibre.org/style.json",
-                center: [-122.1, 36.37],
-                zoom: 8,
-            });
 
-            map.on("load", () => {
-                map.addSource("roads", {
-                    type: "vector",
-                    url: "https://api.maptiler.com/tiles/v3/tiles.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL",
-                });
-                map.addLayer({
-                  id: "roads-wide",
-                  type: "line",
-                  source: "roads",
-                  "source-layer": "transportation",
-                  paint: {
+<head>
+    <title>Vector line tile overflow</title>
+    <meta property="og:description" content="Vector line tile overflow." />
+    <meta property="og:category" content="Vector & GeoJSON" />
+    <meta property="og:order" content="1" />
+    <meta property="og:created" content="2025-06-25" />
+    <meta charset='utf-8'>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel='stylesheet' href='../../dist/maplibre-gl.css' />
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body,
+        #map {
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <script type="module">
+        import * as maplibregl from '../../dist/maplibre-gl-dev.mjs';
+
+        const map = new maplibregl.Map({
+            container: "map",
+            style: "https://demotiles.maplibre.org/style.json",
+            center: [-122.1, 36.37],
+            zoom: 8,
+        });
+
+        map.on("load", () => {
+            map.addSource("roads", {
+                type: "vector",
+                url: "https://api.maptiler.com/tiles/v3/tiles.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL",
+            });
+            map.addLayer({
+                id: "roads-wide",
+                type: "line",
+                source: "roads",
+                "source-layer": "transportation",
+                paint: {
                     "line-color": "#0000ff",
                     "line-width": 48,
-                  },
-                });
-                map.addLayer({
-                    id: "roads-offset-2",
-                    type: "line",
-                    source: "roads",
-                    "source-layer": "transportation",
-                    paint: {
-                        "line-color": "#ff0000",
-                        "line-width": 8,
-                        "line-offset": [
-                            "interpolate",
-                            ["linear"],
-                            ["zoom"],
-                            0,
-                            32,
-                            9,
-                            32,
-                            18,
-                            [
-                                "match",
-                                ["get", "class"],
-                                "motorway",
-                                32,
-                                32,
-                            ],
-                        ],
-                    },
-                });
+                },
             });
-        </script>
-    </body>
+            map.addLayer({
+                id: "roads-offset-2",
+                type: "line",
+                source: "roads",
+                "source-layer": "transportation",
+                paint: {
+                    "line-color": "#ff0000",
+                    "line-width": 8,
+                    "line-offset": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        0,
+                        32,
+                        9,
+                        32,
+                        18,
+                        [
+                            "match",
+                            ["get", "class"],
+                            "motorway",
+                            32,
+                            32,
+                        ],
+                    ],
+                },
+            });
+        });
+    </script>
+</body>
+
 </html>
