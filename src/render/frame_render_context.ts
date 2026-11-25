@@ -285,8 +285,9 @@ export class FrameRenderContext {
         return new StencilMode({func: gl.NOTEQUAL, mask: 0xFF}, id, 0xFF, gl.KEEP, gl.KEEP, gl.REPLACE);
     }
 
-    stencilModeForClipping(tileID: OverscaledTileID, isOffset = false): StencilMode {
-        if (isOffset) {
+    stencilModeForClipping(tileID: OverscaledTileID, isOverflowCandidate = false): StencilMode {
+        // WORKAROUND: don't clip features that are probably overflowing their tile
+        if (isOverflowCandidate) {
             return StencilMode.disabled;
         }
         const gl = this.context.gl;
