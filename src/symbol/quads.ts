@@ -1,16 +1,15 @@
 import Point from '@mapbox/point-geometry';
-
 import {GLYPH_PBF_BORDER} from '../style/parse_glyph_pbf.ts';
+import {SHAPING_DEFAULT_OFFSET, applyTextFit} from './shaping.ts';
+import {IMAGE_PADDING} from '../render/image_atlas.ts';
+import ONE_EM from './one_em.ts';
 
 import type {Anchor} from './anchor.ts';
 import type {Box, PositionedIcon, Shaping} from './shaping.ts';
-import {SHAPING_DEFAULT_OFFSET, applyTextFit} from './shaping.ts';
-import {IMAGE_PADDING} from '../render/image_atlas.ts';
 import type {SymbolStyleLayer} from '../style/style_layer/symbol_style_layer.ts';
 import type {Feature} from '@maplibre/maplibre-gl-style-spec';
 import type {StyleImage} from '../style/style_image.ts';
-import ONE_EM from './one_em.ts';
-import {type Rect} from '../render/glyph_atlas.ts';
+import type {Rect} from '../render/glyph_atlas.ts';
 
 /**
  * A textured quad for rendering a single icon or glyph.
@@ -51,12 +50,18 @@ const border = IMAGE_PADDING;
 
 /**
  * Create the quads used for rendering an icon.
+ *
+ * A quad's corner is an offset that the shader scales by the icon size plus a pixel offset that it does not. The
+ * pixel offsets hold the parts of a stretchable image that are not stretched, so they are scaled by `iconSize` here:
+ * a stretchable image grows with `icon-size` as a whole, border included, whether or not it is fitted to its text.
+ * `iconSize` is the size at the zoom the tile is laid out for.
  */
 export function getIconQuads(
     shapedIcon: PositionedIcon,
     iconRotate: number,
     isSDFIcon: boolean,
-    hasIconTextFit: boolean
+    hasIconTextFit: boolean,
+    iconSize: number = 1
 ): SymbolQuad[] {
     const quads = [];
 
@@ -131,8 +136,9 @@ export function getIconQuads(
         const tr = new Point(rightEm, topEm);
         const br = new Point(rightEm, bottomEm);
         const bl = new Point(leftEm, bottomEm);
-        const pixelOffsetTL = new Point(leftPx / pixelRatio, topPx / pixelRatio);
-        const pixelOffsetBR = new Point(rightPx / pixelRatio, bottomPx / pixelRatio);
+        const pixelScale = iconSize / pixelRatio;
+        const pixelOffsetTL = new Point(leftPx * pixelScale, topPx * pixelScale);
+        const pixelOffsetBR = new Point(rightPx * pixelScale, bottomPx * pixelScale);
 
         const angle = iconRotate * Math.PI / 180;
 
@@ -159,8 +165,8 @@ export function getIconQuads(
             h: y2 - y1
         };
 
-        const minFontScaleX = fixedContentWidth / pixelRatio / iconWidth;
-        const minFontScaleY = fixedContentHeight / pixelRatio / iconHeight;
+        const minFontScaleX = fixedContentWidth * pixelScale / iconWidth;
+        const minFontScaleY = fixedContentHeight * pixelScale / iconHeight;
 
         // Icon quad is padded, so texture coordinates also need to be padded.
         return {tl, tr, bl, br, tex: subRect, writingMode: undefined, glyphOffset: [0, 0], sectionIndex: 0, pixelOffsetTL, pixelOffsetBR, minFontScaleX, minFontScaleY, isSDF: isSDFIcon};

@@ -1,6 +1,7 @@
 import {describe, test, expect} from 'vitest';
-import {type ImagePosition} from '../render/image_atlas.ts';
 import {getIconQuads} from './quads.ts';
+
+import type {ImagePosition} from '../render/image_atlas.ts';
 
 describe('getIconQuads', () => {
     const image = Object.freeze({
@@ -153,6 +154,25 @@ describe('getIconQuads', () => {
             }
         }]);
 
+    });
+
+    test('scales the parts of a stretchable image that are not stretched by the icon size', () => {
+        const stretchable = {
+            ...image,
+            stretchX: [[4, 11]],
+            stretchY: [[4, 7]],
+            content: [4, 4, 11, 7]
+        } as ImagePosition;
+        const shapedIcon = {top: -10, right: 20, bottom: 10, left: -20, image: stretchable};
+
+        const atSize1 = getIconQuads(shapedIcon, 0, false, true, 1);
+        const atSize2 = getIconQuads(shapedIcon, 0, false, true, 2);
+
+        expect(atSize2).toHaveLength(9);
+        expect(atSize2.map(q => q.tl)).toEqual(atSize1.map(q => q.tl));
+        expect(atSize2.map(q => q.pixelOffsetTL)).toEqual(atSize1.map(q => q.pixelOffsetTL.mult(2)));
+        expect(atSize2.map(q => q.pixelOffsetBR)).toEqual(atSize1.map(q => q.pixelOffsetBR.mult(2)));
+        expect(atSize2[0].pixelOffsetTL).toEqual({x: -10, y: -10});
     });
 
 });

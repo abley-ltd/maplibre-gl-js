@@ -1,22 +1,23 @@
 import {ImageRequest} from '../util/image_request.ts';
 import {ResourceType} from '../util/request_manager.ts';
-import {extend, isImageBitmap, readImageUsingVideoFrame} from '../util/util.ts';
-import {type Evented} from '../util/evented.ts';
+import {isImageBitmap, readImageUsingVideoFrame} from '../util/util.ts';
 import {browser} from '../util/browser.ts';
 import {offscreenCanvasSupported} from '../util/offscreen_canvas_supported.ts';
 import {OverscaledTileID} from '../tile/tile_id.ts';
 import {RasterTileSource} from './raster_tile_source.ts';
 // ensure DEMData is registered for worker transfer on main thread:
 import '../data/dem_data.ts';
-import type {DEMEncoding} from '../data/dem_data.ts';
+import {isOffscreenCanvasDistorted} from '../util/offscreen_canvas_distorted.ts';
+import {RGBAImage} from '../util/image.ts';
+import {MessageType} from '../util/actor_messages.ts';
 
+import type {DEMEncoding} from '../data/dem_data.ts';
+import type {LoadTileJsonResponse} from './load_tilejson.ts';
 import type {Source} from './source.ts';
 import type {Dispatcher} from '../util/dispatcher.ts';
 import type {Tile} from '../tile/tile.ts';
 import type {RasterDEMSourceSpecification} from '@maplibre/maplibre-gl-style-spec';
-import {isOffscreenCanvasDistorted} from '../util/offscreen_canvas_distorted.ts';
-import {RGBAImage} from '../util/image.ts';
-import {MessageType} from '../util/actor_messages.ts';
+import type {Evented} from '../util/evented.ts';
 
 /**
  * A source containing raster DEM tiles (See the [Style Specification](https://maplibre.org/maplibre-style-spec/) for detailed documentation of options.)
@@ -45,7 +46,7 @@ export class RasterDEMTileSource extends RasterTileSource implements Source {
         super(id, options, dispatcher, eventedParent);
         this.type = 'raster-dem';
         this.maxzoom = 22;
-        this._options = extend({type: 'raster-dem'}, options);
+        this._options = {type: 'raster-dem', ...options};
         this.encoding = options.encoding || 'mapbox';
         this.redFactor = options.redFactor;
         this.greenFactor = options.greenFactor;
@@ -53,8 +54,17 @@ export class RasterDEMTileSource extends RasterTileSource implements Source {
         this.baseShift = options.baseShift;
     }
 
+    /**
+     * @internal
+     * Takes on the encoding the TileJSON sets, as well as the fields a raster source does.
+     */
+    override _applyTileJSON(tileJSON: LoadTileJsonResponse): void {
+        super._applyTileJSON(tileJSON);
+        this.encoding = (tileJSON.encoding as DEMEncoding) ?? this.encoding;
+    }
+
     override async loadTile(tile: Tile): Promise<void> {
-        const url = tile.tileID.canonical.url(this.tiles, this.map.getPixelRatio(), this.scheme);
+        const url = tile.tileID.canonical.url(this.tiles, this.map.getPixelRatio(), this.scheme, this.map.style.projection.worldCoordinateHelper.tileMatrixSet);
         tile.neighboringTiles = this._getNeighboringTiles(tile.tileID);
         tile.abortController = new AbortController();
         try {
@@ -64,11 +74,18 @@ export class RasterDEMTileSource extends RasterTileSource implements Source {
                 tile.state = 'unloaded';
                 return;
             }
-            if (response?.data) {
-                const img = response.data;
+            if (response) {
                 if (this.map._refreshExpiredTiles && (response.cacheControl || response.expires)) {
                     tile.setExpiryData({cacheControl: response.cacheControl, expires: response.expires});
                 }
+                // An empty response (e.g. HTTP 204 for a missing DEM tile) carries no elevation
+                // data: treat the tile as loaded without a DEM instead of building a degenerate
+                // one that would fail against its neighbors in backfillBorder (#1551).
+                if (!response.data) {
+                    tile.state = 'loaded';
+                    return;
+                }
+                const img = response.data;
                 const transfer = isImageBitmap(img) && offscreenCanvasSupported();
                 const rawImageData = transfer ? img : await this.readImageNow(img);
                 const params = {
@@ -93,6 +110,7 @@ export class RasterDEMTileSource extends RasterTileSource implements Source {
                 tile.dem = await tile.actor.sendAsync({type: MessageType.loadDEMTile, data: params});
                 tile.needsHillshadePrepare = true;
                 tile.needsTerrainPrepare = true;
+                tile.needsColorReliefPrepare = true;
                 tile.state = 'loaded';
             }
         } catch (err) {
@@ -108,15 +126,15 @@ export class RasterDEMTileSource extends RasterTileSource implements Source {
 
     async readImageNow(img: ImageBitmap | HTMLImageElement): Promise<RGBAImage | ImageData> {
         if (typeof VideoFrame !== 'undefined' && isOffscreenCanvasDistorted()) {
-            const width = img.width + 2;
-            const height = img.height + 2;
+            const width = img.width + 4;
+            const height = img.height + 4;
             try {
-                return new RGBAImage({width, height}, await readImageUsingVideoFrame(img, -1, -1, width, height));
+                return new RGBAImage({width, height}, await readImageUsingVideoFrame(img, -2, -2, width, height));
             } catch {
                 // fall-back to browser canvas decoding
             }
         }
-        return browser.getImageData(img, 1);
+        return browser.getImageData(img, 2);
     }
 
     _getNeighboringTiles(tileID: OverscaledTileID): Record<string, {backfilled: boolean}> {

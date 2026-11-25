@@ -1,11 +1,11 @@
 import {describe, test, expect} from 'vitest';
 import {CircleStyleLayer} from './circle_style_layer.ts';
-import {type LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
-import {type EvaluationParameters} from '../evaluation_parameters.ts';
 import {type CanonicalTileID, UnwrappedTileID} from '../../tile/tile_id.ts';
 import Point from '@mapbox/point-geometry';
-import {GlobeTransform} from '../../geo/projection/globe_transform.ts';
-import {MercatorTransform} from '../../geo/projection/mercator_transform.ts';
+import {createTestCamera} from '../../util/test/util.ts';
+
+import type {EvaluationParameters} from '../evaluation_parameters.ts';
+import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
 import type {VectorTileFeatureLike} from '@maplibre/vt-pbf';
 
 describe('CircleStyleLayer.queryIntersectsFeature', () => {
@@ -47,8 +47,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
     }
 
     describe('Mercator projection', () => {
-        const transform = new MercatorTransform({minZoom: 0, maxZoom: 22, minPitch: 0, maxPitch: 85, renderWorldCopies: true});
-        transform.resize(400, 300);
+        const {projectedCamera} = createTestCamera({minZoom: 0, maxZoom: 22, minPitch: 0, maxPitch: 85, renderWorldCopies: true, width: 400, height: 300});
 
         describe('map pitch alignment', () => {
 
@@ -56,7 +55,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer().queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
@@ -64,7 +63,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer().queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });
@@ -74,7 +73,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
@@ -82,7 +81,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });
@@ -95,14 +94,14 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer({pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer({pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });
@@ -112,7 +111,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport', pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
@@ -120,7 +119,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport', pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });
@@ -129,8 +128,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
     });
 
     describe('globe projection', () => {
-        const transform = new GlobeTransform();
-        transform.resize(400, 300);
+        const {projectedCamera} = createTestCamera({width: 400, height: 300}, {projection: 'globe'});
 
         describe('map pitch alignment', () => {
 
@@ -138,7 +136,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer().queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
@@ -146,7 +144,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer().queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });
@@ -156,7 +154,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
@@ -164,7 +162,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });
@@ -177,14 +175,14 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer({pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer({pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });
@@ -194,7 +192,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `true` when a circle intersects a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport', pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryTrue,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(true);
                 });
@@ -202,7 +200,7 @@ describe('CircleStyleLayer.queryIntersectsFeature', () => {
                 test('returns `false` when a circle does not intersect a point', () => {
                     expect(createCircleLayer({pitchScale: 'viewport', pitchAlignment: 'viewport'}).queryIntersectsFeature({
                         queryGeometry: queryGeometryFalse,
-                        transform,
+                        projectedCamera,
                         ...params
                     } as any)).toBe(false);
                 });

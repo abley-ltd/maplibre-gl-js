@@ -2,9 +2,7 @@ import {describe, beforeEach, afterEach, test, expect, vi, type MockInstance} fr
 import {Style} from './style.ts';
 import {TileManager} from '../tile/tile_manager.ts';
 import {StyleLayer} from './style_layer.ts';
-import {extend} from '../util/util.ts';
 import {ErrorEvent, Event} from '../util/evented.ts';
-import {type AJAXError} from '../util/ajax.ts';
 import {MapSourceDataEvent} from '../ui/events.ts';
 import {RGBAImage} from '../util/image.ts';
 import {rtlMainThreadPluginFactory} from '../source/rtl_text_plugin_main_thread.ts';
@@ -12,26 +10,32 @@ import {browser} from '../util/browser.ts';
 import {OverscaledTileID} from '../tile/tile_id.ts';
 import {fakeServer, type FakeServer} from 'nise';
 import {ImageRequest} from '../util/image_request.ts';
-
-import {type EvaluationParameters} from './evaluation_parameters.ts';
+import {EvaluationParameters} from './evaluation_parameters.ts';
 import {Color, type Feature, type LayerSpecification, type GeoJSONSourceSpecification, type FilterSpecification, type SourceSpecification, type StyleSpecification, type SymbolLayerSpecification, type SkySpecification, type CameraFunctionSpecification} from '@maplibre/maplibre-gl-style-spec';
-import {type GeoJSONSource} from '../source/geojson_source.ts';
-import {StubMap, sleep, waitForEvent} from '../util/test/util.ts';
+import {StubMap, createTestCamera, sleep, waitForEvent} from '../util/test/util.ts';
+import {setNow, restoreNow} from '../util/time_control.ts';
 import {RTLPluginLoadedEventName} from '../source/rtl_text_plugin_status.ts';
 import {MessageType} from '../util/actor_messages.ts';
-import {MercatorTransform} from '../geo/projection/mercator_transform.ts';
-import {type Tile} from '../tile/tile.ts';
+
+import type {PossiblyEvaluated} from './properties.ts';
+import type {ProjectedCamera} from '../camera/projected_camera.ts';
+import type {SymbolLayoutProps, SymbolLayoutPropsPossiblyEvaluated} from './style_layer/symbol_style_layer_properties.g.ts';
+import type {CirclePaintProps, CirclePaintPropsPossiblyEvaluated} from './style_layer/circle_style_layer_properties.g.ts';
+import type {Tile} from '../tile/tile.ts';
+import type {GeoJSONSource} from '../source/geojson_source.ts';
+import type {CanvasSource} from '../source/canvas_source.ts';
+import type {AJAXError} from '../util/ajax.ts';
 import type Point from '@mapbox/point-geometry';
-import {type PossiblyEvaluated} from './properties.ts';
-import {type SymbolLayoutProps, type SymbolLayoutPropsPossiblyEvaluated} from './style_layer/symbol_style_layer_properties.g.ts';
-import {type CirclePaintProps, type CirclePaintPropsPossiblyEvaluated} from './style_layer/circle_style_layer_properties.g.ts';
+import type {BackgroundStyleLayer} from './style_layer/background_style_layer.ts';
+import type {WorldCoordinateHelper} from '../geo/world_types.ts';
 
 function createStyleJSON(properties?): StyleSpecification {
-    return extend({
+    return {
         'version': 8,
         'sources': {},
-        'layers': []
-    }, properties);
+        'layers': [],
+        ...properties,
+    };
 }
 
 function createSource() {
@@ -367,14 +371,12 @@ describe('Style.loadJSON', () => {
     test('creates sources', async () => {
         const style = createStyle();
 
-        style.loadJSON(extend(createStyleJSON(), {
-            'sources': {
-                'mapLibre': {
-                    'type': 'vector',
-                    'tiles': []
-                }
+        style.loadJSON({...createStyleJSON(), 'sources': {
+            'mapLibre': {
+                'type': 'vector',
+                'tiles': []
             }
-        }));
+        }});
 
         await style.once('style.load');
         expect(style.tileManagers['mapLibre']).toBeInstanceOf(TileManager);
@@ -407,9 +409,7 @@ describe('Style.loadJSON', () => {
         const transformSpy = vi.spyOn(map._requestManager, 'transformRequest');
         const style = createStyle(map);
 
-        style.loadJSON(extend(createStyleJSON(), {
-            'sprite': 'http://example.com/sprites/bright-v8'
-        }));
+        style.loadJSON({...createStyleJSON(), 'sprite': 'http://example.com/sprites/bright-v8'});
 
         await style.once('style.load');
 
@@ -597,9 +597,8 @@ describe('Style.loadJSON', () => {
         // was used when evaluating the layer
         const globalState = {color: {default: 'red'}, radius: {default: 12}};
         style.setGlobalState(globalState);
-        const layer = style.getLayer('layer-id');
-        layer.recalculate({} as EvaluationParameters, []);
-        const paint = layer.paint as PossiblyEvaluated<CirclePaintProps, CirclePaintPropsPossiblyEvaluated>;
+        style.update({} as EvaluationParameters);
+        const paint = style.getLayer('layer-id').paint as PossiblyEvaluated<CirclePaintProps, CirclePaintPropsPossiblyEvaluated>;
         expect(paint.get('circle-color').evaluate({} as Feature, {})).toEqual(new Color(1, 0, 0, 1));
         expect(paint.get('circle-radius').evaluate({} as Feature, {})).toBe(12);
     });
@@ -660,7 +659,7 @@ describe('Style._load', () => {
 
     test('layers are broadcasted to worker', () => {
         const style = new Style(getStubMap());
-        let dispatchType: MessageType;
+        let dispatchType: string;
         let dispatchData;
         const styleSpec = createStyleJSON({
             layers: [{
@@ -739,6 +738,18 @@ describe('Style._load', () => {
         style._load(styleSpec, {validate: false});
         expect(style.projection.name).toBe('mercator');
         expect(style.serialize().projection).toBeUndefined();
+    });
+
+    test('evaluates a projection from the global state without a warning', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const style = new Style(getStubMap());
+        const styleSpec = createStyleJSON({
+            state: {projectionType: {default: 'vertical-perspective'}},
+            projection: {type: ['global-state', 'projectionType']}
+        });
+
+        style._load(styleSpec, {validate: false});
+        expect(warn).not.toHaveBeenCalled();
     });
 });
 
@@ -1484,6 +1495,28 @@ describe('Style.setSky', () => {
         expect(inputJson.sky).toBe(inputSky);
         expect(inputJsonString).toEqual(JSON.stringify(inputJson));
     });
+
+    test('fires an error on the style when given an invalid property', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({sky: {'sky-color': 'red'}}));
+        await style.once('style.load');
+
+        const promise = style.once('error');
+        style.setSky({'sky-color': 'blue', 'not-a-sky-property': 1} as any);
+        const event = await promise;
+        expect(event.error.message).toContain('not-a-sky-property');
+    });
+
+    test('keeps the previous value from getSky() after a rejected setSky', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({sky: {'sky-color': 'red'}}));
+        await style.once('style.load');
+
+        style.on('error', () => {});
+        style.setSky({'sky-color': 'blue', 'not-a-sky-property': 1} as any);
+
+        expect(style.getSky()).toEqual({'sky-color': 'red'});
+    });
 });
 
 describe('Style.setGlyphs', () => {
@@ -1524,6 +1557,72 @@ describe('Style.setGlyphs', () => {
         // Unset via undefined
         style.setGlyphs(undefined);
         expect(style.getGlyphsUrl()).toBeNull();
+    });
+});
+
+describe('Style.setFontFaces', () => {
+    const fontFaces = {
+        'Noto Sans Regular': [{url: 'https://example.com/khmer.ttf', 'unicode-range': ['U+1780-17FF']}]
+    };
+
+    test('applies the font faces a loading style declares', async () => {
+        const style = new Style(getStubMap());
+        const setFontFaces = vi.spyOn(style.glyphManager, 'setFontFaces');
+        style.loadJSON(createStyleJSON({'font-faces': fontFaces} as any));
+        await style.once('style.load');
+
+        expect(setFontFaces).toHaveBeenCalledWith(fontFaces);
+        expect(style.getFontFaces()).toEqual(fontFaces);
+    });
+
+    test('reports no font faces when the style declares none', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON());
+        await style.once('style.load');
+
+        expect(style.getFontFaces()).toBeNull();
+    });
+
+    test('hands the new font faces to the glyph manager', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON());
+        await style.once('style.load');
+        const setFontFaces = vi.spyOn(style.glyphManager, 'setFontFaces');
+
+        style.setFontFaces(fontFaces);
+
+        expect(setFontFaces).toHaveBeenCalledWith(fontFaces);
+        expect(style.getFontFaces()).toEqual(fontFaces);
+    });
+
+    test('allows font faces to be unset via null and undefined', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({'font-faces': fontFaces} as any));
+        await style.once('style.load');
+
+        style.setFontFaces(null);
+        expect(style.getFontFaces()).toBeNull();
+
+        style.setFontFaces(fontFaces);
+        expect(style.getFontFaces()).toEqual(fontFaces);
+
+        style.setFontFaces(undefined);
+        expect(style.getFontFaces()).toBeNull();
+    });
+
+    test('round-trips through serialize, so setState can diff them', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({'font-faces': fontFaces} as any));
+        await style.once('style.load');
+
+        expect(style.serialize()['font-faces']).toEqual(fontFaces);
+
+        const nextFontFaces = {'Noto Sans Regular': 'https://example.com/noto.ttf'};
+        expect(style.setState(createStyleJSON({'font-faces': nextFontFaces} as any))).toBe(true);
+        expect(style.getFontFaces()).toEqual(nextFontFaces);
+
+        expect(style.setState(createStyleJSON())).toBe(true);
+        expect(style.getFontFaces()).toBeNull();
     });
 });
 
@@ -1790,6 +1889,7 @@ describe('Style.setGlobalState', () => {
         const style = new Style(getStubMap());
         expect(() => style.setGlobalState({})).toThrow(/load/i);
     });
+
     test('sets global state', async () => {
         const style = new Style(getStubMap());
         style.loadJSON(createStyleJSON());
@@ -2006,6 +2106,99 @@ describe('Style.setGlobalState', () => {
 
         expect(style.tileManagers['line-source-id'].resume).not.toHaveBeenCalled();
         expect(style.tileManagers['line-source-id'].reload).not.toHaveBeenCalled();
+    });
+});
+
+describe('a global state change transitions what reads it, issue #8395', () => {
+    test('a paint property runs from the value the state had to the new one', async () => {
+        const style = createStyle();
+        style.loadJSON(createStyleJSON({
+            state: {opacity: {default: 0.2}},
+            layers: [{id: 'background', type: 'background', paint: {'background-opacity': ['global-state', 'opacity']}}]
+        }));
+        await style.once('style.load');
+        const transition = {duration: 300, delay: 0};
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+
+        style.setGlobalStateProperty('opacity', 1);
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+        expect((style.getLayer('background') as BackgroundStyleLayer).paint.get('background-opacity')).toBe(0.2);
+
+        style.update(new EvaluationParameters(0, {now: 150, transition}));
+        expect((style.getLayer('background') as BackgroundStyleLayer).paint.get('background-opacity')).toBeCloseTo(0.6);
+        expect(style.hasTransitions()).toBe(true);
+
+        style.update(new EvaluationParameters(0, {now: 301, transition}));
+        expect((style.getLayer('background') as BackgroundStyleLayer).paint.get('background-opacity')).toBe(1);
+        expect(style.hasTransitions()).toBe(false);
+    });
+
+    test('a state change mid-transition continues exactly as setting the value would', async () => {
+        const style = createStyle();
+        style.loadJSON(createStyleJSON({
+            state: {opacity: {default: 0.2}},
+            layers: [
+                {id: 'state', type: 'background', paint: {'background-opacity': ['global-state', 'opacity']}},
+                {id: 'plain', type: 'background', paint: {'background-opacity': 0.2}}
+            ]
+        }));
+        await style.once('style.load');
+        const transition = {duration: 300, delay: 0};
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+
+        style.setGlobalStateProperty('opacity', 1);
+        style.setPaintProperty('plain', 'background-opacity', 1);
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+        style.update(new EvaluationParameters(0, {now: 150, transition}));
+        style.setGlobalStateProperty('opacity', 0.4);
+        style.setPaintProperty('plain', 'background-opacity', 0.4);
+
+        style.update(new EvaluationParameters(0, {now: 150, transition}));
+        expect((style.getLayer('state') as BackgroundStyleLayer).paint.get('background-opacity'))
+            .toBe((style.getLayer('plain') as BackgroundStyleLayer).paint.get('background-opacity'));
+        style.update(new EvaluationParameters(0, {now: 300, transition}));
+        expect((style.getLayer('state') as BackgroundStyleLayer).paint.get('background-opacity'))
+            .toBe((style.getLayer('plain') as BackgroundStyleLayer).paint.get('background-opacity'));
+
+        style.update(new EvaluationParameters(0, {now: 451, transition}));
+        expect((style.getLayer('state') as BackgroundStyleLayer).paint.get('background-opacity')).toBe(0.4);
+        expect(style.hasTransitions()).toBe(false);
+    });
+
+    test('changes made before a frame run from the value on screen', async () => {
+        const style = createStyle();
+        style.loadJSON(createStyleJSON({
+            state: {opacity: {default: 0.2}},
+            layers: [{id: 'background', type: 'background', paint: {'background-opacity': ['global-state', 'opacity']}}]
+        }));
+        await style.once('style.load');
+        const transition = {duration: 300, delay: 0};
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+
+        style.setGlobalStateProperty('opacity', 0.5);
+        style.setGlobalStateProperty('opacity', 1);
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+        style.update(new EvaluationParameters(0, {now: 150, transition}));
+
+        expect((style.getLayer('background') as BackgroundStyleLayer).paint.get('background-opacity')).toBeCloseTo(0.6);
+    });
+
+    test('a running transition keeps its start when the state its prior value reads changes', async () => {
+        const style = createStyle();
+        style.loadJSON(createStyleJSON({
+            state: {opacity: {default: 0.2}},
+            layers: [{id: 'background', type: 'background', paint: {'background-opacity': ['global-state', 'opacity']}}]
+        }));
+        await style.once('style.load');
+        const transition = {duration: 300, delay: 0};
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+
+        style.setPaintProperty('background', 'background-opacity', 1);
+        style.update(new EvaluationParameters(0, {now: 0, transition}));
+        style.setGlobalStateProperty('opacity', 0);
+
+        style.update(new EvaluationParameters(0, {now: 150, transition}));
+        expect((style.getLayer('background') as BackgroundStyleLayer).paint.get('background-opacity')).toBeCloseTo(0.6);
     });
 });
 
@@ -2432,16 +2625,30 @@ describe('Style.addLayer', () => {
         expect((layer as any).source).toEqual(source);
     });
 
+    test('adds a layer whose inline source holds a canvas element', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON());
+        await style.once('style.load');
+        const canvas = window.document.createElement('canvas');
+
+        style.addLayer({
+            id: 'canvas',
+            type: 'raster',
+            source: {type: 'canvas', canvas, animate: false, coordinates: [[-10, 10], [10, 10], [10, -10], [-10, -10]]} as any
+        });
+
+        expect(style.getLayer('canvas').source).toBe('canvas');
+        expect((style.getSource('canvas') as CanvasSource).getCanvas()).toBe(canvas);
+    });
+
     test('reloads source', async () => {
         const style = createStyle();
-        style.loadJSON(extend(createStyleJSON(), {
-            'sources': {
-                'mapLibre': {
-                    'type': 'vector',
-                    'tiles': []
-                }
+        style.loadJSON({...createStyleJSON(), 'sources': {
+            'mapLibre': {
+                'type': 'vector',
+                'tiles': []
             }
-        }));
+        }});
         const layer = {
             'id': 'symbol',
             'type': 'symbol',
@@ -2461,21 +2668,19 @@ describe('Style.addLayer', () => {
 
     test('#3895 reloads source (instead of clearing) if adding this layer with the same type, immediately after removing it', async () => {
         const style = createStyle();
-        style.loadJSON(extend(createStyleJSON(), {
-            'sources': {
-                'mapLibre': {
-                    'type': 'vector',
-                    'tiles': []
-                }
-            },
-            layers: [{
-                'id': 'my-layer',
-                'type': 'symbol',
-                'source': 'mapLibre',
-                'source-layer': 'libremap',
-                'filter': ['==', 'id', 0]
-            }]
-        }));
+        style.loadJSON({...createStyleJSON(), 'sources': {
+            'mapLibre': {
+                'type': 'vector',
+                'tiles': []
+            }
+        },
+        layers: [{
+            'id': 'my-layer',
+            'type': 'symbol',
+            'source': 'mapLibre',
+            'source-layer': 'libremap',
+            'filter': ['==', 'id', 0]
+        }]});
 
         const layer = {
             'id': 'my-layer',
@@ -2496,21 +2701,19 @@ describe('Style.addLayer', () => {
 
     test('clears source (instead of reloading) if adding this layer with a different type, immediately after removing it', async () => {
         const style = createStyle();
-        style.loadJSON(extend(createStyleJSON(), {
-            'sources': {
-                'mapLibre': {
-                    'type': 'vector',
-                    'tiles': []
-                }
-            },
-            layers: [{
-                'id': 'my-layer',
-                'type': 'symbol',
-                'source': 'mapLibre',
-                'source-layer': 'libremap',
-                'filter': ['==', 'id', 0]
-            }]
-        }));
+        style.loadJSON({...createStyleJSON(), 'sources': {
+            'mapLibre': {
+                'type': 'vector',
+                'tiles': []
+            }
+        },
+        layers: [{
+            'id': 'my-layer',
+            'type': 'symbol',
+            'source': 'mapLibre',
+            'source-layer': 'libremap',
+            'filter': ['==', 'id', 0]
+        }]});
 
         const layer = {
             'id': 'my-layer',
@@ -2613,14 +2816,12 @@ describe('Style.addLayer', () => {
 
     test('fires an error on non-existent source layer', async () => {
         const style = new Style(getStubMap());
-        style.loadJSON(extend(createStyleJSON(), {
-            sources: {
-                dummy: {
-                    type: 'geojson',
-                    data: {type: 'FeatureCollection', features: []}
-                }
+        style.loadJSON({...createStyleJSON(), sources: {
+            dummy: {
+                type: 'geojson',
+                data: {type: 'FeatureCollection', features: []}
             }
-        }));
+        }});
 
         const layer = {
             id: 'dummy',
@@ -2791,32 +2992,49 @@ describe('Style.moveLayer', () => {
         style.moveLayer('b', 'b');
         expect(style._order).toEqual(['a', 'b', 'c']);
     });
+
+    test('keeps the order when the before layer does not exist', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({
+            layers: [
+                {id: 'a', type: 'background'},
+                {id: 'b', type: 'background'}
+            ]
+        }));
+
+        await style.once('style.load');
+        const promise = style.once('error');
+        style.moveLayer('a', 'c');
+        const {error} = await promise;
+        expect(error.message).toMatch(/Cannot move layer "a" before non-existing layer "c"/);
+        expect(style.getLayersOrder()).toEqual(['a', 'b']);
+
+        style.removeLayer('a');
+        expect(style.getLayersOrder()).toEqual(['b']);
+    });
 });
 
 describe('Style.setPaintProperty', () => {
     test('#4738 postpones source reload until layers have been broadcast to workers', async () => {
         const style = new Style(getStubMap());
-        style.loadJSON(extend(createStyleJSON(), {
-            'sources': {
-                'geojson': {
-                    'type': 'geojson',
-                    'data': {'type': 'FeatureCollection', 'features': []}
-                }
-            },
-            'layers': [
-                {
-                    'id': 'circle',
-                    'type': 'circle',
-                    'source': 'geojson'
-                }
-            ]
-        }));
+        style.loadJSON({...createStyleJSON(), 'sources': {
+            'geojson': {
+                'type': 'geojson',
+                'data': {'type': 'FeatureCollection', 'features': []}
+            }
+        },
+        'layers': [
+            {
+                'id': 'circle',
+                'type': 'circle',
+                'source': 'geojson'
+            }
+        ]});
 
-        const tr = new MercatorTransform();
-        tr.resize(512, 512);
+        const {projectedCamera} = createTestCamera({width: 512, height: 512});
 
         await style.once('style.load');
-        style.update({zoom: tr.zoom} as EvaluationParameters);
+        style.update({zoom: projectedCamera.zoom} as EvaluationParameters);
         const tileManager = style.tileManagers['geojson'];
         const source = style.getSource('geojson') as GeoJSONSource;
 
@@ -3261,12 +3479,14 @@ describe('Style.getLayersOrder', () => {
 describe('Style.queryRenderedFeatures', () => {
 
     let style: Style;
-    let transform: MercatorTransform;
+    let projectedCamera: ProjectedCamera;
+    let worldCoordinateHelper: WorldCoordinateHelper;
 
     beforeEach(() => new Promise<void>(callback => {
         style = new Style(getStubMap());
-        transform = new MercatorTransform();
-        transform.resize(512, 512);
+        const camera = createTestCamera({width: 512, height: 512});
+        projectedCamera = camera.projectedCamera;
+        worldCoordinateHelper = camera.context.worldCoordinateHelper;
         function queryMapLibreFeatures(layers, serializedLayers, getFeatureState, queryGeom, cameraQueryGeom, scale, params) {
             const features = {
                 'land': [{
@@ -3371,32 +3591,35 @@ describe('Style.queryRenderedFeatures', () => {
                 return [];
             };
 
-            style.tileManagers.mapLibre.transform = transform;
-            style.tileManagers.other.transform = transform;
+            style.tileManagers.mapLibre.projectedCamera = projectedCamera;
+            style.tileManagers.mapLibre.worldCoordinateHelper = worldCoordinateHelper;
+            style.tileManagers.other.projectedCamera = projectedCamera;
+            style.tileManagers.other.worldCoordinateHelper = worldCoordinateHelper;
 
             style.update({zoom: 0} as EvaluationParameters);
-            style._updateSources(transform);
+            style._updateSources(projectedCamera, worldCoordinateHelper);
             callback();
         });
     }));
 
     afterEach(() => {
         style = undefined;
-        transform = undefined;
+        projectedCamera = undefined;
+        worldCoordinateHelper = undefined;
     });
 
     test('returns feature type', () => {
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, projectedCamera, worldCoordinateHelper);
         expect(results[0].geometry.type).toBe('Line');
     });
 
     test('filters by `layers` option', () => {
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: ['land']}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: ['land']}, projectedCamera, worldCoordinateHelper);
         expect(results).toHaveLength(2);
     });
 
     test('filters by `layers` option as a Set', () => {
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: new Set(['land'])}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: new Set(['land'])}, projectedCamera, worldCoordinateHelper);
         expect(results).toHaveLength(2);
     });
 
@@ -3408,23 +3631,23 @@ describe('Style.queryRenderedFeatures', () => {
             }
             return style;
         });
-        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: 'string' as any}, transform);
+        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: 'string' as any}, projectedCamera, worldCoordinateHelper);
         expect(errors).toBe(1);
     });
 
     test('includes layout properties', () => {
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, projectedCamera, worldCoordinateHelper);
         const layout = results[0].layer.layout;
         expect(layout['line-cap']).toBe('round');
     });
 
     test('includes paint properties', () => {
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, projectedCamera, worldCoordinateHelper);
         expect(results[2].layer.paint['line-color']).toBe('red');
     });
 
     test('includes metadata', () => {
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {}, projectedCamera, worldCoordinateHelper);
 
         const layer = results[1].layer;
         expect((layer.metadata as any).something).toBe('else');
@@ -3432,13 +3655,13 @@ describe('Style.queryRenderedFeatures', () => {
     });
 
     test('include multiple layers', () => {
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: new Set(['land', 'landref'])}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: new Set(['land', 'landref'])}, projectedCamera, worldCoordinateHelper);
         expect(results).toHaveLength(3);
     });
 
     test('does not query sources not implicated by `layers` parameter', () => {
         style.tileManagers.mapLibre.map.queryRenderedFeatures = vi.fn();
-        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: ['land--other']}, transform);
+        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: ['land--other']}, projectedCamera, worldCoordinateHelper);
         expect(style.tileManagers.mapLibre.map.queryRenderedFeatures).not.toHaveBeenCalled();
     });
 
@@ -3448,7 +3671,7 @@ describe('Style.queryRenderedFeatures', () => {
             if (event['error']?.message.includes('does not exist in the map\'s style and cannot be queried for features.')) errors++;
             return style;
         });
-        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: ['merp']}, transform);
+        const results = style.queryRenderedFeatures([{x: 0, y: 0} as Point], {layers: ['merp']}, projectedCamera, worldCoordinateHelper);
         expect(errors).toBe(1);
         expect(results).toHaveLength(0);
     });
@@ -3504,11 +3727,13 @@ describe('Style.query*Features', () => {
 
     let style: Style;
     let onError;
-    let transform;
+    let projectedCamera: ProjectedCamera;
+    let worldCoordinateHelper: WorldCoordinateHelper;
 
     beforeEach(() => new Promise<void>(callback => {
-        transform = new MercatorTransform();
-        transform.resize(100, 100);
+        const camera = createTestCamera({width: 100, height: 100});
+        projectedCamera = camera.projectedCamera;
+        worldCoordinateHelper = camera.context.worldCoordinateHelper;
         style = new Style(getStubMap());
         style.loadJSON({
             'version': 8,
@@ -3536,7 +3761,7 @@ describe('Style.query*Features', () => {
     });
 
     test('queryRenderedFeatures emits an error on incorrect filter', () => {
-        expect(style.queryRenderedFeatures([{x: 0, y: 0} as Point], {filter: 7 as any}, transform)).toEqual([]);
+        expect(style.queryRenderedFeatures([{x: 0, y: 0} as Point], {filter: 7 as any}, projectedCamera, worldCoordinateHelper)).toEqual([]);
         expect(onError.mock.calls[0][0].error.message).toMatch(/queryRenderedFeatures\.filter/);
     });
 
@@ -3548,7 +3773,7 @@ describe('Style.query*Features', () => {
             }
             return style;
         });
-        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {filter: 'invalidFilter' as any, validate: false}, transform);
+        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {filter: 'invalidFilter' as any, validate: false}, projectedCamera, worldCoordinateHelper);
         expect(errors).toBe(0);
     });
 
@@ -3578,7 +3803,8 @@ describe('Style.query*Features', () => {
 
     test('style adds global-state to queryRenderedFeatures', async () => {
         const tileManager = style.tileManagers['geojson'];
-        tileManager.transform = transform;
+        tileManager.projectedCamera = projectedCamera;
+        tileManager.worldCoordinateHelper = worldCoordinateHelper;
         const queryRenderedFeatures = vi.fn().mockReturnValue([]);
         vi.spyOn(tileManager, 'tilesIn').mockReturnValue([{
             tile: {
@@ -3589,7 +3815,7 @@ describe('Style.query*Features', () => {
             cameraQueryGeometry: [{x: 0, y: 0} as Point],
             scale: 1,
         }]);
-        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {filter: '[]' as any, validate: false}, transform);
+        style.queryRenderedFeatures([{x: 0, y: 0} as Point], {filter: '[]' as any, validate: false}, projectedCamera, worldCoordinateHelper);
         expect(queryRenderedFeatures).toHaveBeenCalled();
         const params = queryRenderedFeatures.mock.lastCall[6];
         expect(params).toHaveProperty('globalState');
@@ -3658,6 +3884,56 @@ describe('Style.hasTransitions', () => {
         style.setPaintProperty('background', 'background-color', 'blue');
         style.update({transition: {duration: 0, delay: 0}} as EvaluationParameters);
         expect(style.hasTransitions()).toBe(false);
+    });
+
+    test('does not transition a sky or a light that has not changed', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({
+            sky: {'sky-color': 'red'},
+            light: {color: '#ff0000'},
+            layers: [{id: 'background', type: 'background'}]
+        }));
+
+        await style.once('style.load');
+        style.setPaintProperty('background', 'background-color', 'blue');
+        style.update({transition: {duration: 300, delay: 0}} as EvaluationParameters);
+
+        expect(style.sky.hasTransition()).toBe(false);
+        expect(style.light.hasTransition()).toBe(false);
+    });
+
+    test('transitions the sky and the light when they are set', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON());
+
+        await style.once('style.load');
+        style.setSky({'sky-color': 'magenta'});
+        style.setLight({color: '#ff0000'});
+        style.update({transition: {duration: 300, delay: 0}} as EvaluationParameters);
+
+        expect(style.sky.hasTransition()).toBe(true);
+        expect(style.light.hasTransition()).toBe(true);
+    });
+
+    test('transitions the sky and the light from the value they had when the global state they read changes', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({
+            state: {c: {default: '#ff0000'}},
+            sky: {'sky-color': ['global-state', 'c']},
+            light: {color: ['global-state', 'c']}
+        }));
+
+        await style.once('style.load');
+        setNow(0);
+        style.setGlobalStateProperty('c', '#0000ff');
+        restoreNow();
+        style.sky.recalculate(new EvaluationParameters(0, {now: 150}));
+        style.light.recalculate(new EvaluationParameters(0, {now: 150}));
+
+        expect(style.sky.hasTransition()).toBe(true);
+        expect(style.light.hasTransition()).toBe(true);
+        expect(style.sky.properties.get('sky-color')).toEqual(new Color(0.5, 0, 0.5, 1));
+        expect(style.light.properties.get('color')).toEqual(new Color(0.5, 0, 0.5, 1));
     });
 });
 
@@ -3808,6 +4084,32 @@ describe('Style.serialize', () => {
             'fog-color': '#fff'
         });
         expect(style.serialize().sky).toBeDefined();
+    });
+
+    test('does not include state property when style has no state defaults', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON());
+
+        await style.once('style.load');
+        expect(style.serialize().state).toBeUndefined();
+    });
+
+    test('include state property for style with state defaults', async () => {
+        const style = new Style(getStubMap());
+        style.loadJSON(createStyleJSON({
+            state: {
+                showCircles: {
+                    default: true,
+                }
+            }
+        }));
+
+        await style.once('style.load');
+        expect(style.serialize().state).toEqual({
+            showCircles: {
+                default: true,
+            },
+        });
     });
 
     test('update sky properties after setting the sky on initial load', async () => {

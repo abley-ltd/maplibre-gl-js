@@ -1,8 +1,8 @@
-import {extend} from '../util/util.ts';
+
 import type {Tile} from '../tile/tile.ts';
 import type {FeatureState} from '@maplibre/maplibre-gl-style-spec';
 import type {InViewTiles} from '../tile/tile_manager_in_view_tiles.ts';
-import type {Painter} from '../render/painter.ts';
+import type {Style} from '../style/style.ts';
 
 export type FeatureStateEntry = {id: string; state: FeatureState};
 export type FeatureStates = FeatureStateEntry[];
@@ -44,8 +44,7 @@ export class SourceFeatureState {
     updateState(sourceLayer: string, featureId: number | string, newState: any): void {
         const feature = String(featureId);
         this.stateChanges[sourceLayer] ||= {};
-        this.stateChanges[sourceLayer][feature] ||= {};
-        extend(this.stateChanges[sourceLayer][feature], newState);
+        this.stateChanges[sourceLayer][feature] = {...this.stateChanges[sourceLayer][feature], ...newState};
 
         if (this.deletedStates[sourceLayer] === null) {
             this.deletedStates[sourceLayer] = {};
@@ -108,7 +107,7 @@ export class SourceFeatureState {
         const base = this.state[sourceLayer] || {};
         const changes = this.stateChanges[sourceLayer] || {};
 
-        const reconciledState = extend({}, base[feature], changes[feature]);
+        const reconciledState = {...base[feature], ...changes[feature]};
 
         //return empty object if the whole source layer is awaiting deletion
         if (this.deletedStates[sourceLayer] === null) return {};
@@ -120,15 +119,15 @@ export class SourceFeatureState {
         return reconciledState;
     }
 
-    initializeTileState(tile: Tile, painter: Painter): void {
+    initializeTileState(tile: Tile, style: Style): void {
         const layerStates: LayerFeatureStates = {};
         for (const sourceLayer in this.state) {
             layerStates[sourceLayer] = featureStatesMapToArray(this.state[sourceLayer]);
         }
-        tile.setFeatureState(layerStates, painter, this.revision);
+        tile.setFeatureState(layerStates, style, this.revision);
     }
 
-    coalesceChanges(inViewTiles: InViewTiles, painter: Painter): void {
+    coalesceChanges(inViewTiles: InViewTiles, style: Style): void {
         //track changes with full state objects, but only for features that got modified
         //use an intermediate object keyed by feature id to naturally deduplicate entries
         const featuresChangedMap: LayerFeatureStatesMap = {};
@@ -137,8 +136,7 @@ export class SourceFeatureState {
             this.state[sourceLayer] ||= {};
             featuresChangedMap[sourceLayer] ||= {};
             for (const feature in this.stateChanges[sourceLayer]) {
-                this.state[sourceLayer][feature] ||= {};
-                extend(this.state[sourceLayer][feature], this.stateChanges[sourceLayer][feature]);
+                this.state[sourceLayer][feature] = {...this.state[sourceLayer][feature], ...this.stateChanges[sourceLayer][feature]};
                 featuresChangedMap[sourceLayer][feature] = this.state[sourceLayer][feature];
             }
         }
@@ -156,11 +154,11 @@ export class SourceFeatureState {
                 for (const feature in this.deletedStates[sourceLayer]) {
                     const deleteWholeFeatureState = this.deletedStates[sourceLayer][feature] === null;
                     if (deleteWholeFeatureState) this.state[sourceLayer][feature] = {};
-                    else {
+                    else if (this.state[sourceLayer][feature]) {
                         for (const key of Object.keys(this.deletedStates[sourceLayer][feature])) {
                             delete this.state[sourceLayer][feature][key];
                         }
-                    }
+                    } else continue;
                     featuresChangedMap[sourceLayer][feature] = this.state[sourceLayer][feature];
                 }
             }
@@ -178,6 +176,6 @@ export class SourceFeatureState {
             featuresChanged[sourceLayer] = featureStatesMapToArray(featuresChangedMap[sourceLayer]);
         }
 
-        inViewTiles.setFeatureState(featuresChanged, painter, this.revision);
+        inViewTiles.setFeatureState(featuresChanged, style, this.revision);
     }
 }

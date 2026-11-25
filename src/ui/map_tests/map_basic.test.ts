@@ -5,9 +5,10 @@ import {Tile} from '../../tile/tile.ts';
 import {OverscaledTileID} from '../../tile/tile_id.ts';
 import {fixedLngLat} from '../../../test/unit/lib/fixed.ts';
 import {type RequestTransformFunction, ResourceType} from '../../util/request_manager.ts';
-import {type MapSourceDataEvent} from '../events.ts';
 import {MessageType} from '../../util/actor_messages.ts';
 import {Style} from '../../style/style.ts';
+
+import type {MapSourceDataEvent} from '../events.ts';
 
 beforeEach(() => {
     beforeMapTest();
@@ -73,6 +74,21 @@ describe('Map', () => {
             map.setTransformRequest(null);
             map._requestManager.transformRequest('', ResourceType.Unknown);
             expect(transformRequest).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('getTransformRequest', () => {
+        test('returns the function from the option or from setTransformRequest, and null without one', () => {
+            const fromOption = vi.fn() as RequestTransformFunction;
+            const map = createMap({transformRequest: fromOption});
+            expect(map.getTransformRequest()).toBe(fromOption);
+
+            const fromSetter = vi.fn() as RequestTransformFunction;
+            map.setTransformRequest(fromSetter);
+            expect(map.getTransformRequest()).toBe(fromSetter);
+
+            map.setTransformRequest(null);
+            expect(map.getTransformRequest()).toBeNull();
         });
     });
 

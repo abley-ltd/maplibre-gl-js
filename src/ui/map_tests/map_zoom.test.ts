@@ -14,6 +14,18 @@ test('setMinZoom', () => {
     expect(map.getZoom()).toBe(3.5);
 });
 
+test('setMinZoom raises the current zoom when it is below the new minimum', () => {
+    const map = createMap({zoom: 2});
+    map.setMinZoom(5);
+    expect(map.getZoom()).toBe(5);
+});
+
+test('setMaxZoom lowers the current zoom when it is above the new maximum', () => {
+    const map = createMap({zoom: 10});
+    map.setMaxZoom(5);
+    expect(map.getZoom()).toBe(5);
+});
+
 test('unset minZoom', () => {
     const map = createMap({minZoom: 5});
     map.setMinZoom(null);
@@ -26,6 +38,17 @@ test('getMinZoom', () => {
     expect(map.getMinZoom()).toBe(-2);
     map.setMinZoom(10);
     expect(map.getMinZoom()).toBe(10);
+});
+
+test('getMinZoom returns the viewport-constrained minimum when requested', () => {
+    const container = window.document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', {value: 560});
+    Object.defineProperty(container, 'clientHeight', {value: 560});
+    const map = createMap({container, minZoom: 0, zoom: 0});
+
+    expect(map.getMinZoom()).toBe(0);
+    expect(map.getMinZoom(true)).toBe(map.getZoom());
+    expect(map.getMinZoom(true)).toBeGreaterThan(0);
 });
 
 test('ignore minZooms over maxZoom', () => {
@@ -87,10 +110,22 @@ test('recalculate zoom is done on the camera update transform', async () => {
     });
     await map.once('style.load');
     map.terrain = createTerrain();
+    map._camera.terrain = map.terrain;
     const canvas = map.getCanvas();
     simulate.dragWithMove(canvas, {x: 100, y: 100}, {x: 100, y: 150});
     map._renderTaskQueue.run();
     expect(map.getZoom()).toBeCloseTo(0.20007702699730118, 10);
+});
+
+test('a camera change after transformCameraUpdate overrides the zoom a max zoom change sets starts from the zoom it rendered', async () => {
+    const map = createMap({zoom: 10});
+    await map.once('style.load');
+    map.setTransformCameraUpdate(vi.fn().mockReturnValueOnce({zoom: 7}).mockReturnValue({}));
+    map.setMaxZoom(8);
+
+    map.setBearing(10);
+
+    expect(map.getZoom()).toBe(7);
 });
 
 test('transformCameraUpdate is called after changing min or max zoom', async () => {

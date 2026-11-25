@@ -3,7 +3,6 @@ uniform lowp vec3 u_lightpos;
 uniform lowp vec3 u_lightpos_globe;
 uniform lowp float u_lightintensity;
 uniform float u_vertical_gradient;
-uniform lowp float u_opacity;
 uniform vec2 u_fill_translate;
 
 layout(location = 0) in vec2 a_pos;
@@ -20,13 +19,26 @@ out vec4 v_color;
 #pragma maplibre: define highp float height
 
 #pragma maplibre: define highp vec4 color
+#pragma maplibre: define highp float opacity
 
 void main() {
     #pragma maplibre: initialize highp float base
     #pragma maplibre: initialize highp float height
     #pragma maplibre: initialize highp vec4 color
+    #pragma maplibre: initialize highp float opacity
+
+    opacity = clamp(opacity, 0.0, 1.0);
+    if (opacity <= 0.0) {
+        gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);
+        return;
+    }
 
     vec3 normal = vec3(a_normal_ed.xyz);
+
+    // The vertical gradient describes the structure itself, so it keeps the extrusion's own
+    // base and height before the terrain elevation is added to them below.
+    float gradient_base = max(0.0, base);
+    float gradient_height = max(0.0, height);
 
     #ifdef TERRAIN3D
 	    // Raise the "ceiling" of elements by the elevation of the centroid, in meters.
@@ -82,12 +94,12 @@ void main() {
     directional = mix((1.0 - u_lightintensity), max((1.0 - colorvalue + u_lightintensity), 1.0), directional);
 
     // Add gradient along z axis of side surfaces
-    if (normal.y != 0.0) {
+    if (normal.z == 0.0) {
         // This avoids another branching statement, but multiplies by a constant of 0.84 if no vertical gradient,
         // and otherwise calculates the gradient based on base + height
         directional *= (
             (1.0 - u_vertical_gradient) +
-            (u_vertical_gradient * clamp((t + base) * pow(height / 150.0, 0.5), mix(0.7, 0.98, 1.0 - u_lightintensity), 1.0)));
+            (u_vertical_gradient * clamp((t + gradient_base) * pow(gradient_height / 150.0, 0.5), mix(0.7, 0.98, 1.0 - u_lightintensity), 1.0)));
     }
 
     // Assign final color based on surface + ambient light color, diffuse light directional, and light color
@@ -96,5 +108,5 @@ void main() {
     v_color.r += clamp(color.r * directional * u_lightcolor.r, mix(0.0, 0.3, 1.0 - u_lightcolor.r), 1.0);
     v_color.g += clamp(color.g * directional * u_lightcolor.g, mix(0.0, 0.3, 1.0 - u_lightcolor.g), 1.0);
     v_color.b += clamp(color.b * directional * u_lightcolor.b, mix(0.0, 0.3, 1.0 - u_lightcolor.b), 1.0);
-    v_color *= u_opacity;
+    v_color *= opacity;
 }

@@ -1,10 +1,8 @@
 import {Event, type ErrorEvent} from '../util/evented.ts';
-
 import {DOM} from '../util/dom.ts';
 import Point from '@mapbox/point-geometry';
-import {extend} from '../util/util.ts';
-import type {MapGeoJSONFeature} from '../util/vectortile_to_geojson.ts';
 
+import type {MapGeoJSONFeature} from '../util/vectortile_to_geojson.ts';
 import type {Map} from './map.ts';
 import type {LngLat} from '../geo/lng_lat.ts';
 import type {ProjectionSpecification, SourceSpecification} from '@maplibre/maplibre-gl-style-spec';
@@ -195,10 +193,17 @@ export type MapEventType = {
     resize: MapLibreEvent;
     /**
      * Fired when the WebGL context is lost.
+     *
+     * The map rebuilds its style once the context is restored. Until the rebuilt style fires `style.load`,
+     * {@link Map.getSource} may return `undefined` and changes to sources or layers are not kept, so apply them
+     * again on that `style.load` event.
      */
     webglcontextlost: MapContextEvent;
     /**
      * Fired when the WebGL context is restored.
+     *
+     * The style is rebuilt asynchronously, so its sources and layers are not available yet when this fires.
+     * Wait for the next `style.load` event before using them.
      */
     webglcontextrestored: MapContextEvent;
     /**
@@ -663,7 +668,7 @@ export class MapMouseEvent extends MapLibreEvent<MouseEvent> {
         originalEvent = originalEvent instanceof MouseEvent ? originalEvent : new MouseEvent(type, originalEvent);
         const point = DOM.mousePos(map.getCanvas(), originalEvent);
         const lngLat = map.unproject(point);
-        super(type, extend({point, lngLat, originalEvent}, data));
+        super(type, {point, lngLat, originalEvent, ...data});
         this._defaultPrevented = false;
         this.target = map;
     }

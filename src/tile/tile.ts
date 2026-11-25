@@ -23,7 +23,6 @@ import type {ImageManager} from '../render/image_manager.ts';
 import type {Context} from '../webgl/context.ts';
 import type {OverscaledTileID} from './tile_id.ts';
 import type {Framebuffer} from '../webgl/framebuffer.ts';
-import type {IReadonlyTransform} from '../geo/transform_interface.ts';
 import type {LayerFeatureStates} from '../source/source_state.ts';
 import type Point from '@mapbox/point-geometry';
 import type {mat4} from 'gl-matrix';
@@ -32,6 +31,10 @@ import type {QueryRenderedFeaturesOptionsStrict, QuerySourceFeatureOptionsStrict
 import type {DashEntry} from '../render/line_atlas.ts';
 import type {VectorTileLayerLike} from '@maplibre/vt-pbf';
 import type {Painter, RTTObject} from '../render/painter.ts';
+import type {Style} from '../style/style.ts';
+import type {RTTFingerprint} from '../webgl/rtt_fingerprint.ts';
+import type {ProjectedCamera} from '../camera/projected_camera.ts';
+import type {GetElevation, WorldCoordinateHelper} from '../geo/world_types.ts';
 
 const CLOCK_SKEW_RETRY_TIMEOUT = 30000;
 
@@ -104,6 +107,7 @@ export class Tile {
     aborted: boolean;
     needsHillshadePrepare: boolean;
     needsTerrainPrepare: boolean;
+    needsColorReliefPrepare: boolean;
     abortController: AbortController;
     texture: any;
     fbo: Framebuffer;
@@ -129,7 +133,7 @@ export class Tile {
      * changes.
      */
     rttObjects: Array<RTTObject | undefined>;
-    rttFingerprint: {[sourceId:string]: string};
+    rttFingerprint: Record<string, RTTFingerprint>;
 
     featureStateRevision: number;
 
@@ -161,10 +165,14 @@ export class Tile {
         this.featureStateRevision = -1;
     }
 
+    /**
+     * Incoming and self-fading raster tiles must remain renderable at zero opacity because
+     * drawing advances their opacity. Only transparent departing tiles have finished fading.
+     */
     isRenderable(symbolLayer: boolean): boolean {
         return (
             this.hasData() &&
-            (!this.fadeEndTime || this.fadeOpacity > 0) &&  // raster fading
+            (!this.fadeEndTime || this.fadingDirection !== FadingDirections.Departing || this.fadeOpacity > 0) &&
             (symbolLayer || !this.holdingForSymbolFade())   // symbol fading
         );
     }
@@ -243,15 +251,26 @@ export class Tile {
     }
 
     /**
+     * @internal
+     * Returns the cached RTT slot of the stack to the painter's pool.
+     */
+    releaseRTTStack(painter: Painter, stack: number): void {
+        const obj = this.rttObjects[stack];
+        if (!obj) return;
+        painter.releaseRTT(obj);
+        this.rttObjects[stack] = undefined;
+    }
+
+    /**
      * Given a data object with a 'buffers' property, load it into
      * this tile's elementGroups and buffers properties and set loaded
      * to true. If the data is null, like in the case of an empty
      * GeoJSON tile, no-op but still set loaded to true.
      * @param data - The data from the worker
-     * @param painter - the painter
+     * @param style - the style the tile's layers belong to
      * @param justReloaded - `true` to just reload
      */
-    loadVectorData(data: WorkerTileResult, painter: Painter, justReloaded?: boolean | null): void {
+    loadVectorData(data: WorkerTileResult, style: Style, justReloaded?: boolean | null): void {
         if (data?.etagUnmodified === true) {
             this.state = 'loaded';
             return;
@@ -286,7 +305,7 @@ export class Tile {
             }
         }
         this.collisionBoxArray = data.collisionBoxArray;
-        this.buckets = deserializeBucket(data.buckets, painter?.style);
+        this.buckets = deserializeBucket(data.buckets, style);
 
         this.hasSymbolBuckets = false;
         for (const id in this.buckets) {
@@ -318,7 +337,7 @@ export class Tile {
         this.queryPadding = 0;
         for (const id in this.buckets) {
             const bucket = this.buckets[id];
-            this.queryPadding = Math.max(this.queryPadding, painter.style.getLayer(id).queryRadius(bucket));
+            this.queryPadding = Math.max(this.queryPadding, style.getLayer(id).queryRadius(bucket));
         }
 
         if (data.imageAtlas) {
@@ -393,10 +412,10 @@ export class Tile {
         cameraQueryGeometry: Point[],
         scale: number,
         params: Pick<QueryRenderedFeaturesOptionsStrict, 'filter' | 'layers' | 'availableImages'> | undefined,
-        transform: IReadonlyTransform,
+        projectedCamera: ProjectedCamera,
+        worldCoordinateHelper: WorldCoordinateHelper,
         maxPitchScaleFactor: number,
-        pixelPosMatrix: mat4,
-        getElevation: undefined | ((x: number, y: number) => number)
+        getElevation: GetElevation | undefined
     ): QueryResults {
         if (!this.latestFeatureIndex?.rawTileData)
             return {};
@@ -406,26 +425,26 @@ export class Tile {
             cameraQueryGeometry,
             scale,
             tileSize: this.tileSize,
-            pixelPosMatrix,
-            transform,
+            projectedCamera,
+            worldCoordinateHelper,
             params,
             queryPadding: this.queryPadding * maxPitchScaleFactor,
             getElevation
         }, layers, serializedLayers, sourceFeatureState);
     }
 
-    querySourceFeatures(result: GeoJSONFeature[], params?: QuerySourceFeatureOptionsStrict): void {
+    querySourceFeatures(result: GeoJSONFeature[], params: QuerySourceFeatureOptionsStrict): void {
         const featureIndex = this.latestFeatureIndex;
         if (!featureIndex?.rawTileData) return;
 
         const vtLayers = featureIndex.loadVTLayers();
 
-        const sourceLayer = params?.sourceLayer ? params.sourceLayer : '';
+        const sourceLayer = params.sourceLayer ? params.sourceLayer : '';
         const layer = vtLayers[GEOJSON_TILE_LAYER_NAME] || vtLayers[sourceLayer];
 
         if (!layer) return;
 
-        const filter = featureFilter(params?.filter, `querySourceFeatures[${sourceLayer}].filter`, params?.globalState);
+        const filter = featureFilter(params.filter, `querySourceFeatures[${sourceLayer}].filter`, params.globalState);
         const {z, x, y} = this.tileID.canonical;
         const coord = {z, x, y};
 
@@ -438,7 +457,7 @@ export class Tile {
                 continue;
             }
             const id = featureIndex.getId(feature, sourceLayer);
-            const geojsonFeature = new GeoJSONFeature(feature, z, x, y, id);
+            const geojsonFeature = new GeoJSONFeature(feature, z, x, y, id, params.worldCoordinateHelper);
             (geojsonFeature as any).tile = coord;
             result.push(geojsonFeature);
         }
@@ -512,7 +531,7 @@ export class Tile {
         }
     }
 
-    setFeatureState(states: LayerFeatureStates, painter: Painter, revision: number): void {
+    setFeatureState(states: LayerFeatureStates, style: Style, revision: number): void {
         if (!this.latestFeatureIndex?.rawTileData ||
             Object.keys(states).length === 0) {
             return;
@@ -527,7 +546,7 @@ export class Tile {
         const vtLayers = this.latestFeatureIndex.loadVTLayers();
 
         for (const id in this.buckets) {
-            if (!painter.style.hasLayer(id)) continue;
+            if (!style.hasLayer(id)) continue;
 
             const bucket = this.buckets[id];
             // Buckets are grouped by common source-layer
@@ -537,7 +556,7 @@ export class Tile {
             if (!sourceLayer || !sourceLayerStates || sourceLayerStates.length === 0) continue;
 
             bucket.update(sourceLayerStates, sourceLayer, this.imageAtlas?.patternPositions || {}, this.dashPositions || {});
-            const layer = painter?.style?.getLayer(id);
+            const layer = style.getLayer(id);
             if (layer) {
                 this.queryPadding = Math.max(this.queryPadding, layer.queryRadius(bucket));
             }

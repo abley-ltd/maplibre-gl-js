@@ -11,7 +11,7 @@ The actual projection is done in three steps:
 - project the 3D vector using a common perspective projection matrix
 
 So the globe is a unit sphere from the point of view of projection.
-This also simplifies a lot of math, and is used extensively in the globe transform class.
+This also simplifies a lot of math, and is used extensively in the vertical perspective camera math.
 
 Geometry is projected to the sphere in the vertex shader.
 
@@ -23,6 +23,12 @@ However, when panning the globe or performing camera animations,
 we do not want the planet to get larger or smaller when changing latitudes.
 Map movement thus compensates for the planet size change by also
 changing zoom level along with latitude changes.
+
+Web mercator ends at about 85.05 degrees of latitude, so between that edge and the pole
+the globe keeps the size it has at the edge.
+There is no data past that edge, so the map center can reach a pole only while the area past the edge fits in the viewport.
+As that area outgrows the viewport when zooming in, the center eases back to the edge,
+so it is back inside the mercator range long before the globe transitions to mercator.
 
 This behavior is completely automatic and transparent to the user.
 The only case when the user needs to be aware of this is when
@@ -100,7 +106,7 @@ because globe and mercator projections converge at high zoom levels, and around 
 they are already very close.
 
 The transition animation is implemented in the shader's projection function,
-and is controlled by a "globeness" parameter passed from the transform.
+and is controlled by a "globeness" parameter that the globe's projected camera carries.
 
 ## GPU latitude precision
 
@@ -173,6 +179,10 @@ that were drawn in the first pass.
 This ensures that no pixel is drawn twice, and that the stretched borders
 are only drawn in regions between tiles. 
 
+## Data near the poles
+
+Web mercator sources carry no data beyond about 85.05 degrees of latitude, so a globe has nothing to draw between that edge and the pole. MapLibre fills the gap by extending the edge of each pole-adjacent tile to the pole: subdivision adds a fan of pole triangles to every tile in the first or last mercator row, and whatever crosses the mercator edge in that tile, a fill polygon or the last row of a raster texture, is stretched all the way to the pole. Both vector and raster sources show this, most visibly around Antarctica, where an ocean polygon that crosses the edge becomes a spike reaching the pole. There is no source data to draw there, so this is the expected result rather than a rendering bug ([#5433](https://github.com/maplibre/maplibre-gl-js/issues/5433)).
+
 ## Symbols
 
 Symbol rendering also had to be adapted for globe, as well as collision detection and placement.
@@ -182,11 +192,11 @@ This is an approximation, but works well in practice.
 
 ## Transformations and unproject
 
-Most projection and unproject functions from the transform interface are adapted for globe,
+Most projection and unproject functions of `CameraMath` are adapted for globe,
 with some caveats.
 The `setLocationAtPoint`function may sometimes not find a valid solution
 for the given parameters.
-Globe transform currently does not support constraining the map's center.
+The globe projection currently does not support constraining the map's center.
 
 ## Controls
 

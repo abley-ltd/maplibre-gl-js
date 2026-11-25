@@ -1,13 +1,13 @@
 import {describe, test, expect, vi} from 'vitest';
 import {createStyleLayer} from './create_style_layer.ts';
 import {FillStyleLayer} from './style_layer/fill_style_layer.ts';
-import {extend} from '../util/util.ts';
 import {Color, type LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
-import {type EvaluationParameters} from './evaluation_parameters.ts';
-import {type TransitionParameters} from './properties.ts';
-import {type BackgroundStyleLayer} from './style_layer/background_style_layer.ts';
-import {type SymbolStyleLayer} from './style_layer/symbol_style_layer.ts';
-import {type CircleStyleLayer} from './style_layer/circle_style_layer.ts';
+
+import type {EvaluationParameters} from './evaluation_parameters.ts';
+import type {TransitionParameters} from './properties.ts';
+import type {BackgroundStyleLayer} from './style_layer/background_style_layer.ts';
+import type {SymbolStyleLayer} from './style_layer/symbol_style_layer.ts';
+import type {CircleStyleLayer} from './style_layer/circle_style_layer.ts';
 
 describe('StyleLayer', () => {
     test('instantiates the correct subclass', () => {
@@ -437,7 +437,7 @@ describe('StyleLayer.getPaintAffectingGlobalStateRefs', () => {
 describe('StyleLayer.serialize', () => {
 
     function createSymbolLayer(layer?) {
-        return extend({
+        return {
             id: 'symbol',
             type: 'symbol',
             paint: {
@@ -445,8 +445,9 @@ describe('StyleLayer.serialize', () => {
             },
             layout: {
                 'text-transform': 'uppercase'
-            }
-        }, layer);
+            },
+            ...layer,
+        };
     }
 
     test('serializes layers', () => {

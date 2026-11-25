@@ -3,7 +3,6 @@ uniform vec2 u_pixel_coord_lower;
 uniform float u_height_factor;
 uniform vec3 u_scale;
 uniform float u_vertical_gradient;
-uniform lowp float u_opacity;
 uniform vec2 u_fill_translate;
 
 uniform vec3 u_lightcolor;
@@ -32,6 +31,7 @@ out vec4 v_lighting;
 #pragma maplibre: define lowp vec4 pattern_to
 #pragma maplibre: define lowp float pixel_ratio_from
 #pragma maplibre: define lowp float pixel_ratio_to
+#pragma maplibre: define highp float opacity
 
 void main() {
     #pragma maplibre: initialize lowp float base
@@ -40,6 +40,13 @@ void main() {
     #pragma maplibre: initialize mediump vec4 pattern_to
     #pragma maplibre: initialize lowp float pixel_ratio_from
     #pragma maplibre: initialize lowp float pixel_ratio_to
+    #pragma maplibre: initialize highp float opacity
+
+    opacity = clamp(opacity, 0.0, 1.0);
+    if (opacity <= 0.0) {
+        gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);
+        return;
+    }
 
     vec2 pattern_tl_a = pattern_from.xy;
     vec2 pattern_br_a = pattern_from.zw;
@@ -55,6 +62,11 @@ void main() {
 
     vec2 display_size_a = (pattern_br_a - pattern_tl_a) / pixel_ratio_from;
     vec2 display_size_b = (pattern_br_b - pattern_tl_b) / pixel_ratio_to;
+
+    // The vertical gradient describes the structure itself, so it keeps the extrusion's own
+    // base and height before the terrain elevation is added to them below.
+    float gradient_base = max(0.0, base);
+    float gradient_height = max(0.0, height);
 
     #ifdef TERRAIN3D
 	    // Raise the "ceiling" of elements by the elevation of the centroid, in meters.
@@ -96,14 +108,14 @@ void main() {
     float directional = clamp(dot(normal / 16383.0, u_lightpos), 0.0, 1.0);
     directional = mix((1.0 - u_lightintensity), max((0.5 + u_lightintensity), 1.0), directional);
 
-    if (normal.y != 0.0) {
+    if (normal.z == 0.0) {
         // This avoids another branching statement, but multiplies by a constant of 0.84 if no vertical gradient,
         // and otherwise calculates the gradient based on base + height
         directional *= (
             (1.0 - u_vertical_gradient) +
-            (u_vertical_gradient * clamp((t + base) * pow(height / 150.0, 0.5), mix(0.7, 0.98, 1.0 - u_lightintensity), 1.0)));
+            (u_vertical_gradient * clamp((t + gradient_base) * pow(gradient_height / 150.0, 0.5), mix(0.7, 0.98, 1.0 - u_lightintensity), 1.0)));
     }
 
     v_lighting.rgb += clamp(directional * u_lightcolor, mix(vec3(0.0), vec3(0.3), 1.0 - u_lightcolor), vec3(1.0));
-    v_lighting *= u_opacity;
+    v_lighting *= opacity;
 }

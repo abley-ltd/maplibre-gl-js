@@ -1,5 +1,5 @@
 import {type RequestParameters, makeRequest, sameOrigin, type GetResourceResponse} from './ajax.ts';
-import {arrayBufferToImageBitmap, arrayBufferToImage, ensureError, extend, isWorker, isImageBitmap} from './util.ts';
+import {arrayBufferToImageBitmap, arrayBufferToImage, ensureError, isWorker, isImageBitmap} from './util.ts';
 import {config} from './config.ts';
 import {AbortError, throwIfAborted} from './abort_error.ts';
 import {getProtocol} from '../source/protocol_crud.ts';
@@ -143,7 +143,7 @@ export namespace ImageRequest {
         return new Promise<GetResourceResponse<HTMLImageElement | ImageBitmap | null>>((resolve, reject) => {
             requestParameters.headers ||= {};
             requestParameters.headers.accept = 'image/webp,*/*';
-            extend(requestParameters, {type: 'image'});
+            requestParameters.type = 'image';
             const request: ImageRequestQueueItem = {
                 abortController,
                 requestParameters,
@@ -172,6 +172,13 @@ export namespace ImageRequest {
         }
     };
 
+    /**
+     * Runs one queued image request.
+     *
+     * An empty response body (e.g. HTTP 204 for a tile without content) resolves with
+     * `data: null`, keeping the expiry headers, so callers can handle the absence
+     * explicitly and re-request when the headers say so.
+     */
     const doImageRequest = async (itemInQueue: ImageRequestQueueItem) => {
         itemInQueue.state = 'running';
         const {requestParameters, supportImageRefresh, imageBitmapOptions, onError, onSuccess, abortController} = itemInQueue;
@@ -205,7 +212,9 @@ export namespace ImageRequest {
                 // User using addProtocol can directly return HTMLImageElement/ImageBitmap type
                 // If HtmlImageElement is used to get image then response type will be HTMLImageElement
                 onSuccess(response);
-            } else if (response.data) {
+            } else if (!response.data || response.data.byteLength === 0) {
+                onSuccess({data: null, cacheControl: response.cacheControl, expires: response.expires});
+            } else {
                 const img = await arrayBufferToCanvasImageSource(response.data, imageBitmapOptions);
                 onSuccess({data: img, cacheControl: response.cacheControl, expires: response.expires});
             }

@@ -8,7 +8,10 @@ export type ProjectionMatrix = Mat4f32 | Mat4f64;
  * Projection data used by renderer shader uniforms. Renderer matrices are stored
  * as 32-bit floats so WebGL can consume them directly without per-upload copies.
  */
-export type RendererProjectionData = ProjectionData<Mat4f32>;
+export type RendererProjectionData = ProjectionData<Mat4f32> & {
+    /** Draws of one frame with the same key share one uniform buffer. */
+    uniformBufferKey?: string;
+};
 
 /**
  * Projection data exposed to custom layers. Some matrices are stored as 64-bit
@@ -71,7 +74,7 @@ export type ProjectionData<MainMatrix extends mat4 = mat4, FallbackMatrix extend
 };
 
 /**
- * Parameters object for the transform's `getProjectionData` function.
+ * Parameters object for `getProjectionData` in `camera_math.ts`.
  * Contains the requested tile ID and more.
  */
 export type ProjectionDataParams = {

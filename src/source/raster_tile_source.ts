@@ -1,13 +1,12 @@
-import {ensureError, extend, pick} from '../util/util.ts';
-
+import {ensureError} from '../util/util.ts';
 import {ImageRequest} from '../util/image_request.ts';
-
 import {ResourceType} from '../util/request_manager.ts';
 import {ErrorEvent, Evented} from '../util/evented.ts';
 import {MapSourceDataEvent, type SourceEventType} from '../ui/events.ts';
-import {loadTileJson} from './load_tilejson.ts';
+import {loadTileJson, type LoadTileJsonResponse} from './load_tilejson.ts';
 import {TileBounds} from '../tile/tile_bounds.ts';
 import {Texture} from '../webgl/texture.ts';
+import {RGBAImage} from '../util/image.ts';
 import {isAbortError} from '../util/abort_error.ts';
 
 import type {Source} from './source.ts';
@@ -66,6 +65,7 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
     dispatcher: Dispatcher;
     map: Map;
     tiles: string[];
+    attribution?: string;
 
     _loaded: boolean;
     _options: RasterSourceSpecification | RasterDEMSourceSpecification;
@@ -87,8 +87,10 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
         this._loaded = false;
         this._premultiplyAlpha = true;
 
-        this._options = extend({type: 'raster'}, options);
-        extend(this, pick(options, ['url', 'scheme', 'tileSize']));
+        this._options = {type: 'raster', ...options};
+        this.url = options.url;
+        if ('scheme' in options) this.scheme = options.scheme;
+        this.tileSize = options.tileSize ?? this.tileSize;
     }
 
     async load(sourceDataChanged: boolean = false): Promise<void> {
@@ -100,8 +102,8 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
             this._tileJSONRequest = null;
             this._loaded = true;
             if (tileJSON) {
-                extend(this, tileJSON);
-                if (tileJSON.bounds) this.tileBounds = new TileBounds(tileJSON.bounds, this.minzoom, this.maxzoom);
+                this._applyTileJSON(tileJSON);
+                if (tileJSON.bounds) this.tileBounds = new TileBounds(tileJSON.bounds, this.minzoom, this.maxzoom, this.map.style.projection.worldCoordinateHelper);
 
                 // `content` is included here to prevent a race condition where `Style._updateSources` is called
                 // before the TileJSON arrives. this makes sure the tiles needed are loaded once TileJSON arrives
@@ -118,6 +120,20 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
                 this.fire(new ErrorEvent(ensureError(err)));
             }
         }
+    }
+
+    /**
+     * @internal
+     * Takes on the fields the TileJSON sets, keeping the current value of any it leaves out.
+     */
+    _applyTileJSON(tileJSON: LoadTileJsonResponse): void {
+        this.tiles = tileJSON.tiles ?? this.tiles;
+        this.minzoom = tileJSON.minzoom ?? this.minzoom;
+        this.maxzoom = tileJSON.maxzoom ?? this.maxzoom;
+        this.attribution = tileJSON.attribution ?? this.attribution;
+        this.bounds = tileJSON.bounds ?? this.bounds;
+        this.scheme = tileJSON.scheme ?? this.scheme;
+        this.tileSize = tileJSON.tileSize ?? this.tileSize;
     }
 
     loaded(): boolean {
@@ -154,6 +170,7 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
      */
     setTiles(tiles: string[]): this {
         this.setSourceProperty(() => {
+            this.tiles = tiles;
             this._options.tiles = tiles;
         });
 
@@ -175,7 +192,7 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
     }
 
     serialize(): RasterSourceSpecification | RasterDEMSourceSpecification {
-        return extend({}, this._options);
+        return {...this._options};
     }
 
     /**
@@ -203,7 +220,7 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
     }
 
     async loadTile(tile: Tile): Promise<void> {
-        const url = tile.tileID.canonical.url(this.tiles, this.map.getPixelRatio(), this.scheme);
+        const url = tile.tileID.canonical.url(this.tiles, this.map.getPixelRatio(), this.scheme, this.map.style.projection.worldCoordinateHelper.tileMatrixSet);
         const premultiply = this._premultiplyAlpha;
         const imageBitmapOptions = premultiply ? undefined : {premultiplyAlpha: 'none'} as const;
         tile.abortController = new AbortController();
@@ -221,13 +238,16 @@ export class RasterTileSource extends Evented<SourceEventType> implements Source
                 tile.state = 'unloaded';
                 return;
             }
-            if (response?.data) {
+            if (response) {
                 if (this.map._refreshExpiredTiles && (response.cacheControl || response.expires)) {
                     tile.setExpiryData({cacheControl: response.cacheControl, expires: response.expires});
                 }
                 const context = this.map.painter.context;
                 const gl = context.gl;
-                const img = response.data;
+                // An empty response (e.g. HTTP 204) is a tile that exists but has no content:
+                // it is drawn as fully transparent, which keeps it distinct from a missing
+                // tile (404), where the parent tile shows through instead.
+                const img = response.data ?? new RGBAImage({width: 1, height: 1}, new Uint8Array(4));
                 tile.texture = this.map.painter.getTileTexture(img.width);
                 if (tile.texture) {
                     tile.texture.update(img, {useMipmap: true, premultiply});

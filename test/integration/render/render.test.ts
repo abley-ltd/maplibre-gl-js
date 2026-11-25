@@ -6,14 +6,14 @@ import pixelmatch from 'pixelmatch';
 import {fileURLToPath} from 'url';
 import {globSync} from 'glob';
 import http from 'http';
-import type {Page, Browser, WebWorker} from 'puppeteer';
-
 import {ensureError} from '../../../src/util/util.ts';
 import {localizeURLs} from '../lib/localize-urls.ts';
 import {launchPuppeteer, startCoverage, stopCoverageAndReport} from '../lib/puppeteer_config.ts';
+import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi, type TestContext} from 'vitest';
+
 import type {MapLibreMap, CanvasSource, PointLike, StyleSpecification, MapEventType} from '../../../dist/maplibre-gl';
 import type * as MapLibreGL from '../../../dist/maplibre-gl';
-import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, test} from 'vitest';
+import type {Page, Browser, WebWorker} from 'puppeteer';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let maplibregl: typeof MapLibreGL;
@@ -28,9 +28,16 @@ const DEFAULT_TEST_TIMEOUT = 60000;
 /**
  * Timeout for the `beforeAll` and `afterAll` hooks, which launch and tear down the browser, the test
  * servers and the coverage reporting. Vitest defaults to 10 seconds, which is not enough on the CI
- * Windows runners.
+ * Windows runners: setup takes about a second on a warm machine, but a cold Windows runner has been
+ * seen to spend more than a minute on the browser launch and the first page load alone. The hooks
+ * run once per split, so a generous value costs nothing when everything is healthy.
  */
-const HOOK_TIMEOUT = 60000;
+const HOOK_TIMEOUT = 180000;
+
+/** How many tests run at the same time, each in its own browser; 1 is serial / default. */
+const TEST_CONCURRENCY = Math.max(1, +process.env.RENDER_TEST_CONCURRENCY || 1);
+
+type RenderTestContext = TestContext & {page: Page};
 
 type TestData = {
     id: string;
@@ -57,6 +64,8 @@ type TestData = {
     fadeDuration: number;
     debug: boolean;
     showOverdrawInspector: boolean;
+    /** Turns on the canvas's multisample antialiasing. */
+    antialias: boolean;
     showPadding: boolean;
     collisionDebug: boolean;
     localIdeographFontFamily: string;
@@ -265,6 +274,17 @@ async function getImageFromStyle(styleForTest: StyleWithTestData, page: Page): P
             }
 
             render(gl: WebGL2RenderingContext, args) {
+                this.draw(gl, args.defaultProjectionData.mainMatrix);
+            }
+
+            /** Draws the point into a terrain tile, whose south-west corner is (-1, -1) in clip space. */
+            renderToTerrainTile(gl: WebGL2RenderingContext, {tileID}: {tileID: {canonical: {x: number; y: number; z: number}; wrap: number}}) {
+                const tiles = 2 ** tileID.canonical.z;
+                const west = tileID.canonical.x + tileID.wrap * tiles;
+                this.draw(gl, [2 * tiles, 0, 0, 0, 0, -2 * tiles, 0, 0, 0, 0, 1, 0, -2 * west - 1, 2 * tileID.canonical.y + 1, 0, 1]);
+            }
+
+            draw(gl: WebGL2RenderingContext, matrix: Float32List) {
                 const vertexArray = new Float32Array([0.5, 0.5, 0.0]);
                 gl.useProgram(this.program);
                 const vertexBuffer = gl.createBuffer();
@@ -273,7 +293,7 @@ async function getImageFromStyle(styleForTest: StyleWithTestData, page: Page): P
                 const posAttrib = gl.getAttribLocation(this.program, 'aPos');
                 gl.enableVertexAttribArray(posAttrib);
                 gl.vertexAttribPointer(posAttrib, 3, gl.FLOAT, false, 0, 0);
-                gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_matrix'), false, args.defaultProjectionData.mainMatrix);
+                gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_matrix'), false, matrix);
                 gl.drawArrays(gl.POINTS, 0, 1);
             }
         }
@@ -507,10 +527,24 @@ async function getImageFromStyle(styleForTest: StyleWithTestData, page: Page): P
             }
         }
 
+        /** Leaves indexed uniform-buffer slots unbound before the next native layer draws. */
+        class UnbindUniformBuffers {
+            id = 'unbind-uniform-buffers';
+            type = 'custom';
+            renderingMode = '3d';
+
+            render(gl: WebGL2RenderingContext) {
+                for (let binding = 0; binding < 3; binding++) {
+                    gl.bindBufferBase(gl.UNIFORM_BUFFER, binding, null);
+                }
+            }
+        }
+
         const customLayerImplementations = {
             'tent-3d': Tent3D,
             'tent-3d-globe': Tent3DGlobe,
-            'null-island': NullIsland
+            'null-island': NullIsland,
+            'unbind-uniform-buffers': UnbindUniformBuffers
         };
 
         async function updateFakeCanvas(document: Document, id: string, imagePath: string) {
@@ -657,13 +691,6 @@ async function getImageFromStyle(styleForTest: StyleWithTestData, page: Page): P
             document.body.appendChild(fakeCanvas);
         }
 
-        if (maplibregl.getRTLTextPluginStatus() === 'unavailable') {
-            await maplibregl.setRTLTextPlugin(
-                'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/dist/mapbox-gl-rtl-text.js',
-                false // Don't lazy load the plugin
-            );
-        }
-
         const map = new maplibregl.Map({
             container: 'map',
             style,
@@ -671,7 +698,7 @@ async function getImageFromStyle(styleForTest: StyleWithTestData, page: Page): P
             attributionControl: false,
             maxPitch: options.maxPitch,
             pixelRatio: options.pixelRatio,
-            canvasContextAttributes: {preserveDrawingBuffer: true, powerPreference: 'default'},
+            canvasContextAttributes: {preserveDrawingBuffer: true, powerPreference: 'default', antialias: options.antialias ?? false},
             fadeDuration: options.fadeDuration || 0,
             localIdeographFontFamily: options.localIdeographFontFamily || false as any,
             crossSourceCollisions: typeof options.crossSourceCollisions === 'undefined' ? true : options.crossSourceCollisions,
@@ -731,10 +758,10 @@ async function getImageFromStyle(styleForTest: StyleWithTestData, page: Page): P
             fakeCanvas.parentNode.removeChild(fakeCanvas);
         }
 
-        return data;
+        return data.toBase64();
     }, styleForTest as any);
 
-    return new Uint8Array(Object.values(evaluatedArray as object) as number[]);
+    return new Uint8Array(Buffer.from(evaluatedArray, 'base64'));
 }
 
 function getReportItem(test: TestData) {
@@ -763,13 +790,8 @@ function getReportItem(test: TestData) {
 }
 
 function addConsoleLogging(page: Page) {
-    page.on('console', async (message) => {
-        if (message.text() !== 'JSHandle@error') {
-            console.log(`${message.type().substring(0, 3).toUpperCase()} ${message.text()}`);
-            return;
-        }
-        const messages = await Promise.all(message.args().map((arg) => arg.getProperty('message')));
-        console.log(`${message.type().substring(0, 3).toUpperCase()} ${messages.filter(Boolean)}`);
+    page.on('console', (message) => {
+        console.log(`${message.type().substring(0, 3).toUpperCase()} ${message.text()}`);
     });
 
     page.on('pageerror', (e) => { console.error(ensureError(e).message); });
@@ -799,19 +821,28 @@ async function createServer() {
         cors: true,
         passthrough: true,
     });
+    /** Serves the `font-faces` tests their font files, pinned by package version so they do not drift. */
+    const fontMount = st({
+        path: 'node_modules/@fontsource',
+        url: '/fonts',
+        cors: true,
+        passthrough: true,
+    });
     const server = http.createServer((req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins, or specify 'http://your-frontend-domain.com'
         res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, POST, PUT, DELETE');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization'); // Include any custom headers your client might send
         distMount(req, res, () => {
-            mount(req, res, () => {
-                if (req.url.includes('/sparse204/1-')) {
-                    res.writeHead(204);
-                    res.end('');
-                } else {
-                    res.writeHead(404);
-                    res.end('');
-                }
+            fontMount(req, res, () => {
+                mount(req, res, () => {
+                    if (req.url.includes('/sparse204/1-')) {
+                        res.writeHead(204);
+                        res.end('');
+                    } else {
+                        res.writeHead(404);
+                        res.end('');
+                    }
+                });
             });
         });
     });
@@ -862,11 +893,13 @@ function printHTMLReport(testStyles: StyleWithTestData[]) {
 }
 
 describe('Render tests', () => {
-    let browser: Browser;
+    let browsers: Browser[] = [];
     let server: http.Server;
     let mvtServer: http.Server;
-    let page: Page;
-    let workers: WebWorker[];
+    let pages: Page[] = [];
+    const freePages: Page[] = [];
+    const workers: WebWorker[][] = [];
+    vi.setConfig({maxConcurrency: TEST_CONCURRENCY});
 
     const directory = path.join(__dirname);
     let testStyles = getTestStyles(directory);
@@ -877,39 +910,49 @@ describe('Render tests', () => {
     }
 
     beforeAll(async () => {
-        browser = await launchPuppeteer(true);
+        const setupStart = Date.now();
+        browsers = await Promise.all(Array.from({length: TEST_CONCURRENCY}, () => launchPuppeteer(true)));
         ({server, mvtServer} = await createServer());
         const serverPort = (server.address() as any).port;
-        page = await browser.newPage();
-        workers = await startCoverage(page);
-        await page.goto(`http://localhost:${serverPort}/test-page.html`, {waitUntil: 'load'});
-        await page.waitForFunction(() => (window as any).maplibregl, {timeout: 10000});
+        pages = await Promise.all(browsers.map(async (browser) => {
+            const page = await browser.newPage();
+            workers.push(await startCoverage(page));
+            await page.goto(`http://localhost:${serverPort}/test-page.html`, {waitUntil: 'load'});
+            await page.waitForFunction(() => (window as any).maplibregl, {timeout: 10000});
+            return page;
+        }));
+        freePages.push(...pages);
+        console.log(`Render test setup took ${Date.now() - setupStart}ms`);
     }, HOOK_TIMEOUT);
 
-    beforeEach((ctx) => {
+    beforeEach((ctx: RenderTestContext) => {
+        ctx.page = freePages.pop();
         if (ctx.task.result?.retryCount > 0) {
             console.log(`Retry ${ctx.task.name} with console logging enabled`);
-            addConsoleLogging(page);
+            addConsoleLogging(ctx.page);
         }
     });
 
-    afterEach(async () => {
-        page.removeAllListeners('console');
-        page.removeAllListeners('pageerror');
-        page.removeAllListeners('response');
-        page.removeAllListeners('requestfailed');
+    afterEach(async (ctx: RenderTestContext) => {
+        ctx.page.removeAllListeners('console');
+        ctx.page.removeAllListeners('pageerror');
+        ctx.page.removeAllListeners('response');
+        ctx.page.removeAllListeners('requestfailed');
+        freePages.push(ctx.page);
     });
 
     afterAll(async () => {
-        await stopCoverageAndReport(page, workers, 'render');
+        if (pages.length > 0) {
+            await stopCoverageAndReport(pages, workers.flat(), 'render');
+        }
         printHTMLReport(testStyles);
-        server.close();
-        mvtServer.close();
-        await browser.close();
+        server?.close();
+        mvtServer?.close();
+        await Promise.all(browsers.map((browser) => browser.close()));
     }, HOOK_TIMEOUT);
 
     for (const style of testStyles) {
-        test(style.metadata.test.id, {retry: 1, timeout: style.metadata.test.timeout || DEFAULT_TEST_TIMEOUT}, async () => {
+        test.concurrent(style.metadata.test.id, {retry: 1, timeout: style.metadata.test.timeout || DEFAULT_TEST_TIMEOUT}, async ({page}: RenderTestContext) => {
             const serverPort = (server.address() as any).port;
             localizeURLs(style, serverPort, path.join(__dirname, '../'));
             const data = await getImageFromStyle(style, page);

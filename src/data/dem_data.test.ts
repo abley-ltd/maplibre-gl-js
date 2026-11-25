@@ -1,12 +1,12 @@
 import {describe, test, expect, vi} from 'vitest';
-import {DEMData} from './dem_data.ts';
+import {DEMData, packDEMData} from './dem_data.ts';
 import {RGBAImage} from '../util/image.ts';
 import {serialize, deserialize} from '../util/web_worker_transfer.ts';
 
 function createMockImage(height, width) {
-    // RGBAImage passed to constructor has uniform 1px padding on all sides.
-    height += 2;
-    width += 2;
+    // RGBAImage passed to constructor has uniform 2px padding on all sides.
+    height += 4;
+    width += 4;
     const pixels = new Uint8Array(height * width * 4);
     for (let i = 0; i < pixels.length; i++) {
         pixels[i] = (i + 1) % 4 === 0 ? 1 : Math.floor(Math.random() * 256);
@@ -29,16 +29,16 @@ describe('DEMData', () => {
             const dem = new DEMData('0', imageData0, 'mapbox');
             expect(dem.uid).toBe('0');
             expect(dem.dim).toBe(4);
-            expect(dem.stride).toBe(6);
+            expect(dem.stride).toBe(8);
         });
 
         test('Uint8ClampedArray', () => {
-            const imageData0 = createMockClampImage(4, 4);
+            const imageData0 = createMockClampImage(6, 6);
             const dem = new DEMData('0', imageData0, 'mapbox');
             expect(dem).not.toBeNull();
             expect(dem['uid']).toBe('0');
             expect(dem['dim']).toBe(2);
-            expect(dem['stride']).toBe(4);
+            expect(dem['stride']).toBe(6);
         });
 
         test('otherEncoding', () => {
@@ -154,13 +154,15 @@ describe('DEMData.backfillBorder with encoding', () => {
 describe('DEMData.sampleBilinear', () => {
     test('interpolates four neighboring pixels', () => {
         const elevations = [
-            0, 0, 0, 0,
-            0, 10, 20, 0,
-            0, 30, 40, 0,
-            0, 0, 0, 0
+            0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+            0, 0, 10, 20, 0, 0,
+            0, 0, 30, 40, 0, 0,
+            0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0
         ];
         const pixels = new Uint8Array(elevations.flatMap(elevation => [elevation, 0, 0, 0]));
-        const dem = new DEMData('sample', new RGBAImage({height: 4, width: 4}, pixels), 'custom', 1.0, 0.0, 0.0, 0.0);
+        const dem = new DEMData('sample', new RGBAImage({height: 6, width: 6}, pixels), 'custom', 1.0, 0.0, 0.0, 0.0);
 
         expect(dem.sampleBilinear(0, 0)).toBe(10);
         expect(dem.sampleBilinear(0.5, 0.5)).toBe(25);
@@ -194,7 +196,7 @@ function expectSerialization(dem0: DEMData, redFactor: number, greenFactor: numb
             $name: 'DEMData',
             uid: '0',
             dim: 4,
-            stride: 6,
+            stride: 8,
             data: dem0.data,
             redFactor,
             greenFactor,
@@ -315,5 +317,24 @@ describe('DEMData pack and unpack', () => {
 
         expect(dem.unpack(255, 0, 255)).toEqual(4170983.75);
         expect(dem.pack(4170983.75)).toEqual({r: 255, g: 0, b: 255});
+    });
+
+    test('custom with a zero factor packs that channel as 0 and the others by their own scale', () => {
+        const dem = new DEMData('0', imageData, 'custom', 0, 25.6, 0.1, 10000);
+        expect(dem.unpack(0, 123, 177)).toBeCloseTo(-6833.5);
+        expect(dem.pack(-6833.5)).toEqual({r: 0, g: 123, b: 177});
+
+        expect(dem.unpack(0, 0, 0)).toBe(-10000);
+        expect(dem.pack(-10000)).toEqual({r: 0, g: 0, b: 0});
+
+        expect(dem.unpack(0, 255, 255)).toBeCloseTo(-3446.5);
+        expect(dem.pack(-3446.5)).toEqual({r: 0, g: 255, b: 255});
+
+        expect(packDEMData(100.5, [1, 0, 1 / 256, 0])).toEqual({r: 100, g: 0, b: 128});
+        expect(packDEMData(-29662, [256, 1, 0, 32768])).toEqual({r: 12, g: 34, b: 0});
+    });
+
+    test('all factors zero packs to black', () => {
+        expect(packDEMData(123, [0, 0, 0, 5])).toEqual({r: 0, g: 0, b: 0});
     });
 });

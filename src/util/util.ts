@@ -1,10 +1,11 @@
 import Point from '@mapbox/point-geometry';
 import unitBezierFactory from '@mapbox/unitbezier';
 import {isOffscreenCanvasDistorted} from './offscreen_canvas_distorted.ts';
-import type {Size} from './image.ts';
-import type {WorkerGlobalScopeInterface} from './web_worker.ts';
 import {mat3, mat4, quat, vec2, vec3, type vec4} from 'gl-matrix';
 import {pixelsToTileUnits} from '../source/pixels_to_tile_units.ts';
+
+import type {Size} from './image.ts';
+import type {WorkerGlobalScopeInterface} from './web_worker.ts';
 import type {OverscaledTileID} from '../tile/tile_id.ts';
 import type {Event} from './evented.ts';
 
@@ -67,7 +68,7 @@ export function createIdentityMat4f32(): Mat4f32 {
  * @param inViewportPixelUnitsUnits - True when the units accepted by the matrix are in viewport pixels instead of tile units.
  */
 export function translatePosition(
-    transform: { bearingInRadians: number; zoom: number },
+    camera: { bearingInRadians: number; zoom: number },
     tile: { tileID: OverscaledTileID; tileSize: number },
     translate: [number, number],
     translateAnchor: 'map' | 'viewport',
@@ -76,8 +77,8 @@ export function translatePosition(
     if (!translate[0] && !translate[1]) return [0, 0];
 
     const angle = inViewportPixelUnitsUnits ?
-        (translateAnchor === 'map' ? -transform.bearingInRadians : 0) :
-        (translateAnchor === 'viewport' ? transform.bearingInRadians : 0);
+        (translateAnchor === 'map' ? -camera.bearingInRadians : 0) :
+        (translateAnchor === 'viewport' ? camera.bearingInRadians : 0);
 
     if (angle) {
         const sinA = Math.sin(angle);
@@ -89,8 +90,8 @@ export function translatePosition(
     }
 
     return [
-        inViewportPixelUnitsUnits ? translate[0] : pixelsToTileUnits(tile, translate[0], transform.zoom),
-        inViewportPixelUnitsUnits ? translate[1] : pixelsToTileUnits(tile, translate[1], transform.zoom)];
+        inViewportPixelUnitsUnits ? translate[0] : pixelsToTileUnits(tile, translate[0], camera.zoom),
+        inViewportPixelUnitsUnits ? translate[1] : pixelsToTileUnits(tile, translate[1], camera.zoom)];
 }
 
 /**
@@ -428,28 +429,6 @@ export function keysDifference<S, T>(
     return difference;
 }
 
-/**
- * Given a destination object and optionally many source objects,
- * copy all properties from the source objects into the destination.
- * The last source object given overrides properties from previous
- * source objects.
- *
- * @param dest - destination object
- * @param sources - sources from which properties are pulled
- */
-export function extend<T extends {}, U>(dest: T, source: U): T & U;
-export function extend<T extends {}, U, V>(dest: T, source1: U, source2: V): T & U & V;
-export function extend<T extends {}, U, V, W>(dest: T, source1: U, source2: V, source3: W): T & U & V & W;
-export function extend(dest: object, ...sources: any[]): any;
-export function extend(dest: object, ...sources: any[]): any {
-    for (const src of sources) {
-        for (const k in src) {
-            dest[k] = src[k];
-        }
-    }
-    return dest;
-}
-
 // See https://stackoverflow.com/questions/49401866/all-possible-keys-of-an-union-type
 type KeysOfUnion<T> = T extends T ? keyof T: never;
 
@@ -535,8 +514,12 @@ export function evaluateZoomSnap(zoom: number, zoomSnap: number, delta?: number)
  * Create an object by mapping all the values of an existing object while
  * preserving their keys.
  */
-export function mapObject(input: any, iterator: Function, context?: any): any {
-    const output = {};
+export function mapObject<Input extends object, Output>(
+    input: Input,
+    iterator: (value: Input[keyof Input], key: Extract<keyof Input, string>, input: Input) => Output,
+    context?: unknown
+): {[K in keyof Input]: Output} {
+    const output = {} as {[K in keyof Input]: Output};
     for (const key in input) {
         output[key] = iterator.call(context || this, input[key], key, input);
     }
@@ -777,9 +760,6 @@ export function isImageBitmap(image: any): image is ImageBitmap {
  * @returns - A  promise resolved when the conversion is finished
  */
 export const arrayBufferToImageBitmap = async (data: ArrayBuffer, options?: ImageBitmapOptions): Promise<ImageBitmap> => {
-    if (data.byteLength === 0) {
-        return createImageBitmap(new ImageData(1, 1), options);
-    }
     const blob: Blob = new Blob([new Uint8Array(data)], {type: 'image/png'});
     try {
         return createImageBitmap(blob, options);
@@ -814,7 +794,7 @@ export const arrayBufferToImage = (data: ArrayBuffer): Promise<HTMLImageElement>
         };
         img.onerror = () => reject(new Error('Could not load image. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.'));
         const blob: Blob = new Blob([new Uint8Array(data)], {type: 'image/png'});
-        img.src = data.byteLength ? URL.createObjectURL(blob) : transparentPngUrl;
+        img.src = URL.createObjectURL(blob);
     });
 };
 
@@ -1126,6 +1106,7 @@ export type TileJSON = {
     bounds?: [number, number, number, number];
     center?: [number, number, number];
     vector_layers: [{id: string}]; // this is partial but enough for what we need
+    sparse?: boolean; // not in the TileJSON spec, read by a vector source as its sparse option
 };
 
 /**
