@@ -179,8 +179,6 @@ function drawLineTiles(
     const gradient = layer.paint.get('line-gradient');
     const crossfade = layer.getCrossfadeParameters();
 
-    const offset = layer.paint.get('line-offset');
-
     let programId: string;
     if (image) programId = 'linePattern';
     else if (dasharray && gradient) programId = 'lineGradientSDF';
@@ -244,11 +242,11 @@ function drawLineTiles(
             uniformValues = lineUniformValues(projectedCamera, tile, layer, pixelRatio);
         }
 
-        // wide or highly offset lines can overflow their tile, disable stencil clipping for these lines
-        // constants below are based on GeoServer Vector tile default tile buffer of 5px
+        // WORKAROUND: wide or highly offset lines can overflow their tile: disable stencil clipping for these lines
+        // constants below are based on the GeoServer Vector tile extension default tile buffer of 5px
         const width = layer.paint.get('line-width');
+        const offset = layer.paint.get('line-offset');
         const isOverflowCandidate = width.constantOr(0) > 10 || offset.value['kind'] === 'composite' || offset.constantOr(0) > 5;
-
         const stencil = frameRenderContext.stencilModeForClipping(coord, isOverflowCandidate);
 
         program.draw(context, gl.TRIANGLES, depthMode,
